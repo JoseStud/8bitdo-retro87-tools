@@ -79,6 +79,33 @@ brightness, speed and star count, click **Stage per-key lighting**, then
 Review and Apply. Staging switches the keyboard into per-key mode. Selecting a
 built-in preset switches back.
 
+## KDE Plasma integration
+
+```sh
+./install-kde.sh                  # asks for sudo once, for the keyboard backlight
+./install-kde.sh --no-backlight   # tray widget only, no root
+./install-kde.sh --uninstall
+```
+
+- **Tray widget "Retro 87 Lighting"**: effect, brightness, speed, colours and a
+  per-key on/off switch. Enable it under Configure System Tray → Entries. Its
+  settings button opens the full app.
+- **Keyboard backlight**: the keyboard appears in Plasma's Brightness applet
+  and responds to the keyboard-brightness keys (5 steps). The slider sets the
+  current preset's brightness, or the per-key brightness in per-key mode.
+
+Both use a user service, `retro87_service.py` (`systemctl --user status retro87`,
+log in `journalctl --user -u retro87`). It opens the dongle only for each
+change, reads it first, writes the changed bytes, verifies them, and saves one
+backup per session before its first write. The D-Bus API
+(`io.github.JoseStud.Retro87`) is described at the top of the file.
+
+How the backlight works: the root step loads the kernel's `uleds` module at
+boot and adds a udev rule. The rule lets your session create a userspace LED
+named `retro87::kbd_backlight`, which UPower reports as a keyboard backlight.
+The service starts before PowerDevil, which only looks for keyboard
+backlights at startup; on first install it restarts PowerDevil once.
+
 ## CLI
 
 Every write command previews by default and only writes with `--apply`, which
@@ -115,7 +142,7 @@ restore them with `led` or the GUI.
 ## Tests
 
 ```sh
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model test_gui   # 51 tests, no hardware
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model test_gui test_service   # 63 tests, no hardware
 ```
 
 The tests cover packet encoding, acknowledgment/readback handling, every

@@ -233,6 +233,44 @@ def rgb_plan(mode, color, brightness, speed, *, echo_color="#ffffff", direction=
     writes.extend(activation_plan(mode))
     return writes
 
+# Byte index of each editable field inside a THEMES record; the colour flag sits just before "color".
+THEME_FIELDS = {"solid": {"color": 2}, "cycle": {"speed": 1}, "color-ripple": {"speed": 1},
+                "breathing": {"speed": 1, "color": 3}, "ripple": {"speed": 1, "color": 3},
+                "resonance": {"speed": 1, "color": 3, "echo": 6},
+                "starlight": {"speed": 1, "color": 4, "echo": 7}}
+
+def theme_plan(profile, mode, *, brightness=None, speed=None, color=None, echo=None):
+    """Edit one preset's stored parameters, keeping the rest of its record.
+
+    Like writeXboxJPColor, the whole theme record is written. An unset (all-ff)
+    record starts from the vendor defaults. Does not select the preset.
+    """
+    if mode not in THEME_FIELDS:
+        raise ValueError(f"{mode} has no adjustable parameters")
+    start, size = THEMES[mode]
+    record = bytearray(profile[start:start+size])
+    if record == b"\xff" * size:
+        record[:] = default_profile("x")[start:start+size]
+    fields = THEME_FIELDS[mode]
+    if brightness is not None:
+        if type(brightness) is not int or not 0 <= brightness <= 100:
+            raise ValueError("Brightness must be 0–100")
+        record[0] = brightness * 255 // 100
+    if speed is not None:
+        if "speed" not in fields:
+            raise ValueError(f"{mode} has no speed")
+        if type(speed) is not int or not 1 <= speed <= 10:
+            raise ValueError("Speed must be 1–10")
+        record[1] = 11 - speed
+    for name, value in (("color", color), ("echo", echo)):
+        if value is not None:
+            if name not in fields:
+                raise ValueError(f"{mode} has no {'highlight ' if name == 'echo' else ''}colour")
+            index = fields[name]
+            record[index:index+3] = color_bytes(value)
+            record[fields["color"]-1] = 1
+    return [(start, bytes(record))]
+
 def load_snapshot(path):
     # Bound input size before parsing, including files that grow during the read.
     with path.open("rb") as handle:

@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [{ "Name": "JoseStud" }],
+        "Category": "System Information",
+        "Description": "Lighting controls for the 8BitDo Retro 87 (Mecha BREAK) keyboard",
+        "Icon": "input-keyboard",
+        "Id": "io.github.josestud.retro87",
+        "License": "MIT",
+        "Name": "Retro 87 Lighting",
+        "Version": "1.0",
+        "Website": "https://github.com/JoseStud/8bitdo-retro87-tools"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-NotificationArea": "true",
+    "X-Plasma-NotificationAreaCategory": "Hardware"
+}

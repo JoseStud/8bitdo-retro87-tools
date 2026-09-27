@@ -1,0 +1,7 @@
+# Retro 87 keyboard backlight (installed by install-kde.sh).
+# Let the logged-in user create userspace LEDs, so retro87_service.py can add
+# "retro87::kbd_backlight", which UPower and Plasma treat as a keyboard backlight.
+KERNEL=="uleds", SUBSYSTEM=="misc", TAG+="uaccess"
+# Let the service show the keyboard's real brightness in that LED. UPower has no
+# capabilities, so it writes through the root group rather than as a privileged root.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="retro87::kbd_backlight", RUN+="/usr/bin/chown @USER@:root /sys/class/leds/%k/brightness", RUN+="/usr/bin/chmod 0664 /sys/class/leds/%k/brightness"

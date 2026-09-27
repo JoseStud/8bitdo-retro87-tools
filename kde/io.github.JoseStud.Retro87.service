@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.JoseStud.Retro87
+Exec=@PYTHON@ @DIR@/retro87_service.py
+SystemdService=retro87.service
