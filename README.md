@@ -132,3 +132,7 @@ mocks or an in-memory simulator.
 
 The tools contain independently written code and numeric protocol tables. They
 do not include or redistribute any vendor binaries or artwork.
+
+## License
+
+MIT; see [LICENSE](LICENSE).
