@@ -1,0 +1,528 @@
+<!DOCTYPE html><html lang="en"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retro 87 Tools · Unofficial</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&display=swap');
+    
+    :root {
+      --bg-app: #171717;
+      --bg-control: #303030;
+      --text-main: #e8e8e8;
+      --text-muted: #a5a5a5;
+      --accent-cyan: #72d7ed;
+      --accent-amber: #dba836;
+    }
+    
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', 'Noto Sans', sans-serif;
+      background-color: var(--bg-app);
+      color: var(--text-main);
+      overflow: hidden;
+    }
+    
+    .titlebar {
+      height: 32px;
+      -webkit-app-region: drag;
+      background-color: var(--bg-app);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-bottom: 1px solid #2a2a2a;
+    }
+    
+    .window-controls {
+      -webkit-app-region: no-drag;
+      display: flex;
+      gap: 16px;
+    }
+    
+    .window-controls button {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+    }
+    
+    .window-controls button:hover {
+      color: var(--text-main);
+    }
+    
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 32px);
+      padding: 24px;
+    }
+    
+    .header-area {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 32px;
+      position: relative;
+    }
+    
+    .back-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-size: 12px;
+      padding: 8px;
+      border-radius: 4px;
+    }
+    
+    .back-btn:hover {
+      background-color: var(--bg-control);
+      color: var(--text-main);
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 32px;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    
+    .tab {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid transparent;
+    }
+    
+    .tab.active {
+      color: var(--accent-cyan);
+      border-bottom-color: var(--accent-cyan);
+    }
+    
+    .main-content {
+      display: flex;
+      flex: 1;
+      gap: 48px;
+    }
+    
+    .sidebar {
+      width: 240px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    
+    .profile-info {
+      font-size: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .label {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    
+    .select-box {
+      background-color: var(--bg-control);
+      border: 1px solid #404040;
+      border-radius: 2px;
+      padding: 8px 12px;
+      color: var(--text-muted);
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+    
+    .dropdown-list {
+      background-color: var(--bg-control);
+      border: 1px solid #404040;
+      border-radius: 2px;
+      margin-top: 4px;
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    
+    .dropdown-item {
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    
+    .dropdown-item.active {
+      color: var(--accent-cyan);
+    }
+    
+    .keyboard-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 32px;
+      position: relative;
+    }
+    
+    .keyboard-diagram {
+      background-color: #252525;
+      border-radius: 8px;
+      padding: 24px;
+      border: 1px solid #333;
+      width: 100%;
+      max-width: 800px;
+      box-shadow: none;
+    }
+    
+    .kb-row {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    
+    .keycap {
+      background-color: #383838;
+      border: 1px solid #444;
+      border-radius: 4px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: #888;
+      cursor: pointer;
+      position: relative;
+    }
+    
+    .keycap:hover {
+      background-color: #444;
+    }
+    
+    .keycap.selected {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 0 1px var(--accent-cyan);
+      color: var(--text-main);
+    }
+    
+    .key-std { width: 40px; }
+    .key-1-25 { width: 50px; }
+    .key-1-5 { width: 60px; }
+    .key-1-75 { width: 70px; }
+    .key-2 { width: 80px; }
+    .key-2-25 { width: 90px; }
+    .key-2-75 { width: 110px; }
+    .key-6-25 { width: 250px; }
+    
+    .extensions {
+      display: flex;
+      gap: 24px;
+      justify-content: center;
+    }
+    
+    .ab-buttons, .super-buttons {
+      background-color: #252525;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 16px;
+    }
+    
+    .footer-bar {
+      margin-top: auto;
+      border-top: 1px solid #2a2a2a;
+      padding-top: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    }
+    
+    .status-area {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      color: var(--accent-amber);
+    }
+    
+    .action-btns {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .btn {
+      padding: 6px 16px;
+      border-radius: 2px;
+      font-size: 12px;
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+    
+    .btn-secondary {
+      background-color: transparent;
+      border: 1px solid #404040;
+      color: var(--text-muted);
+    }
+    
+    .btn-primary {
+      background-color: var(--accent-cyan);
+      border: none;
+      color: #000;
+    }
+    .btn-enabled { opacity: 1; cursor: pointer; }
+    .super-buttons > div { background-color: #303030; color: #e8e8e8; display: flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body>
+  <div class="min-h-screen bg-[#171717] flex flex-col" data-sd-id="1">
+    <!-- Titlebar -->
+    <div class="titlebar" data-sd-id="2">
+      <div class="flex items-center gap-2" data-sd-id="3">
+        <iconify-icon icon="fluent:window-console-20-regular"></iconify-icon>
+        <span data-sd-id="4">Retro 87 Tools · Unofficial — Mecha BREAK: Panther</span>
+      </div>
+      <div class="window-controls" data-sd-id="5">
+        <button data-sd-id="6"><iconify-icon icon="fluent:subtract-20-regular"></iconify-icon></button>
+        <button data-sd-id="7"><iconify-icon icon="fluent:maximize-20-regular"></iconify-icon></button>
+        <button data-sd-id="8"><iconify-icon icon="fluent:dismiss-20-regular"></iconify-icon></button>
+      </div>
+    </div>
+
+    <div class="app-container" data-sd-id="9">
+      <!-- Header -->
+      <div class="header-area" data-sd-id="10">
+        <button class="back-btn" id="nav-profiles" data-sd-id="11">
+          <iconify-icon icon="fluent:chevron-left-24-regular" width="24"></iconify-icon>
+          <span data-sd-id="12">Profiles</span>
+        </button>
+        
+        <div class="tabs" data-sd-id="13">
+          <div class="tab active" data-sd-id="14">
+            <iconify-icon icon="fluent:keyboard-24-regular" width="24"></iconify-icon>
+            <span data-sd-id="15">Keys</span>
+          </div>
+          <div class="tab" data-sd-id="16">
+            <iconify-icon icon="fluent:branch-24-regular" width="24"></iconify-icon>
+            <span data-sd-id="17">Macros</span>
+          </div>
+          <div class="tab" data-sd-id="18">
+            <iconify-icon icon="fluent:speaker-2-24-regular" width="24"></iconify-icon>
+            <span data-sd-id="19">Volume</span>
+          </div>
+          <div class="tab" data-sd-id="20">
+            <iconify-icon icon="fluent:lightbulb-24-regular" width="24"></iconify-icon>
+            <span data-sd-id="21">Lighting</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="main-content" data-sd-id="22">
+        <!-- Sidebar Editor -->
+        <div class="sidebar" data-sd-id="23">
+          <div class="profile-info" data-sd-id="24">
+            Current Profile: <span class="text-[#a5a5a5]" data-sd-id="25">Not initialized</span>
+          </div>
+          <button class="btn btn-secondary btn-enabled" id="create-profile">Create Profile…</button>
+          <p class="text-xs text-[#a5a5a5]">Creates a staged profile only. The keyboard changes only after Apply.</p>
+          
+          <div class="control-group mt-4" data-sd-id="26">
+            <div class="label text-[16px] text-white" data-sd-id="27">Caps Lock</div>
+            <div class="select-box" data-sd-id="28">
+              <span data-sd-id="29">Unknown / no profile</span>
+              <iconify-icon icon="fluent:chevron-down-16-regular"></iconify-icon>
+            </div>
+            
+            <div class="dropdown-list mt-2" data-sd-id="30">
+              <div class="dropdown-item active" data-sd-id="31">Default</div>
+              <div class="dropdown-item" data-sd-id="32">Function</div>
+              <div class="dropdown-item" data-sd-id="33">Alphanumeric</div>
+              <div class="dropdown-item" data-sd-id="34">Navigation</div>
+              <div class="dropdown-item" data-sd-id="35">Modifiers</div>
+              <div class="dropdown-item" data-sd-id="36">Symbol</div>
+              <div class="dropdown-item" data-sd-id="37">Mouse Function</div>
+              <div class="dropdown-item">Multimedia</div>
+              <div class="dropdown-item">None</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Keyboard Area -->
+        <div class="keyboard-area" data-sd-id="38">
+          <div class="text-[#a5a5a5] text-xs italic absolute -top-6" data-sd-id="39">
+            * Provisional Panther geometry preview
+          </div>
+          
+          <div class="keyboard-diagram" data-sd-id="40">
+            <!-- Esc row -->
+            <div class="kb-row" data-sd-id="41">
+              <div class="keycap key-std" data-sd-id="42">ESC</div>
+              <div class="w-[40px]" data-sd-id="43"></div>
+              <div class="keycap key-std" data-sd-id="44">F1</div>
+              <div class="keycap key-std" data-sd-id="45">F2</div>
+              <div class="keycap key-std" data-sd-id="46">F3</div>
+              <div class="keycap key-std" data-sd-id="47">F4</div>
+              <div class="w-[20px]" data-sd-id="48"></div>
+              <div class="keycap key-std" data-sd-id="49">F5</div>
+              <div class="keycap key-std" data-sd-id="50">F6</div>
+              <div class="keycap key-std" data-sd-id="51">F7</div>
+              <div class="keycap key-std" data-sd-id="52">F8</div>
+              <div class="w-[20px]" data-sd-id="53"></div>
+              <div class="keycap key-std" data-sd-id="54">F9</div>
+              <div class="keycap key-std" data-sd-id="55">F10</div>
+              <div class="keycap key-std" data-sd-id="56">F11</div>
+              <div class="keycap key-std" data-sd-id="57">F12</div>
+              <div class="w-[20px]" data-sd-id="58"></div>
+              <div class="keycap key-std" data-sd-id="59">PRT</div>
+              <div class="keycap key-std" data-sd-id="60">SCR</div>
+              <div class="keycap key-std" data-sd-id="61">PAU</div>
+            </div>
+            <div class="h-[8px]" data-sd-id="62"></div>
+            
+            <!-- Num row -->
+            <div class="kb-row" data-sd-id="63">
+              <div class="keycap key-std" data-sd-id="64">`</div>
+              <div class="keycap key-std" data-sd-id="65">1</div>
+              <div class="keycap key-std" data-sd-id="66">2</div>
+              <div class="keycap key-std" data-sd-id="67">3</div>
+              <div class="keycap key-std" data-sd-id="68">4</div>
+              <div class="keycap key-std" data-sd-id="69">5</div>
+              <div class="keycap key-std" data-sd-id="70">6</div>
+              <div class="keycap key-std" data-sd-id="71">7</div>
+              <div class="keycap key-std" data-sd-id="72">8</div>
+              <div class="keycap key-std" data-sd-id="73">9</div>
+              <div class="keycap key-std" data-sd-id="74">0</div>
+              <div class="keycap key-std" data-sd-id="75">-</div>
+              <div class="keycap key-std" data-sd-id="76">=</div>
+              <div class="keycap key-2" data-sd-id="77">BACK</div>
+              <div class="w-[20px]" data-sd-id="78"></div>
+              <div class="keycap key-std" data-sd-id="79">INS</div>
+              <div class="keycap key-std" data-sd-id="80">HM</div>
+              <div class="keycap key-std" data-sd-id="81">PU</div>
+            </div>
+            
+            <!-- QWERTY row -->
+            <div class="kb-row" data-sd-id="82">
+              <div class="keycap key-1-5" data-sd-id="83">TAB</div>
+              <div class="keycap key-std" data-sd-id="84">Q</div>
+              <div class="keycap key-std" data-sd-id="85">W</div>
+              <div class="keycap key-std" data-sd-id="86">E</div>
+              <div class="keycap key-std" data-sd-id="87">R</div>
+              <div class="keycap key-std" data-sd-id="88">T</div>
+              <div class="keycap key-std" data-sd-id="89">Y</div>
+              <div class="keycap key-std" data-sd-id="90">U</div>
+              <div class="keycap key-std" data-sd-id="91">I</div>
+              <div class="keycap key-std" data-sd-id="92">O</div>
+              <div class="keycap key-std" data-sd-id="93">P</div>
+              <div class="keycap key-std" data-sd-id="94">[</div>
+              <div class="keycap key-std" data-sd-id="95">]</div>
+              <div class="keycap key-1-5" data-sd-id="96">\</div>
+              <div class="w-[20px]" data-sd-id="97"></div>
+              <div class="keycap key-std" data-sd-id="98">DEL</div>
+              <div class="keycap key-std" data-sd-id="99">END</div>
+              <div class="keycap key-std" data-sd-id="100">PD</div>
+            </div>
+            
+            <!-- ASDF row -->
+            <div class="kb-row" data-sd-id="101">
+              <div class="keycap key-1-75 selected" data-sd-id="102">CAPS</div>
+              <div class="keycap key-std" data-sd-id="103">A</div>
+              <div class="keycap key-std" data-sd-id="104">S</div>
+              <div class="keycap key-std" data-sd-id="105">D</div>
+              <div class="keycap key-std" data-sd-id="106">F</div>
+              <div class="keycap key-std" data-sd-id="107">G</div>
+              <div class="keycap key-std" data-sd-id="108">H</div>
+              <div class="keycap key-std" data-sd-id="109">J</div>
+              <div class="keycap key-std" data-sd-id="110">K</div>
+              <div class="keycap key-std" data-sd-id="111">L</div>
+              <div class="keycap key-std" data-sd-id="112">;</div>
+              <div class="keycap key-std" data-sd-id="113">'</div>
+              <div class="keycap key-2-25" data-sd-id="114">ENTER</div>
+            </div>
+            
+            <!-- ZXCV row -->
+            <div class="kb-row" data-sd-id="115">
+              <div class="keycap key-2-25" data-sd-id="116">SHIFT</div>
+              <div class="keycap key-std" data-sd-id="117">Z</div>
+              <div class="keycap key-std" data-sd-id="118">X</div>
+              <div class="keycap key-std" data-sd-id="119">C</div>
+              <div class="keycap key-std" data-sd-id="120">V</div>
+              <div class="keycap key-std" data-sd-id="121">B</div>
+              <div class="keycap key-std" data-sd-id="122">N</div>
+              <div class="keycap key-std" data-sd-id="123">M</div>
+              <div class="keycap key-std" data-sd-id="124">,</div>
+              <div class="keycap key-std" data-sd-id="125">.</div>
+              <div class="keycap key-std" data-sd-id="126">/</div>
+              <div class="keycap key-2-75" data-sd-id="127">SHIFT</div>
+              <div class="w-[64px]" data-sd-id="128"></div>
+              <div class="keycap key-std" data-sd-id="129">↑</div>
+            </div>
+            
+            <!-- Space row -->
+            <div class="kb-row" data-sd-id="130">
+              <div class="keycap key-1-25" data-sd-id="131">CTRL</div>
+              <div class="keycap key-1-25" data-sd-id="132">WIN</div>
+              <div class="keycap key-1-25" data-sd-id="133">ALT</div>
+              <div class="keycap key-6-25" data-sd-id="134"></div>
+              <div class="keycap key-1-25" data-sd-id="135">ALT</div>
+              <div class="keycap key-1-25" data-sd-id="136">FN</div>
+              <div class="keycap key-1-25" data-sd-id="137">MENU</div>
+              <div class="keycap key-1-25" data-sd-id="138">CTRL</div>
+              <div class="w-[20px]" data-sd-id="139"></div>
+              <div class="keycap key-std" data-sd-id="140">←</div>
+              <div class="keycap key-std" data-sd-id="141">↓</div>
+              <div class="keycap key-std" data-sd-id="142">→</div>
+            </div>
+          </div>
+
+          <div class="extensions" data-sd-id="143">
+            <div class="ab-buttons flex gap-4 items-center" data-sd-id="144">
+              <div class="w-8 h-8 rounded-full border border-[#444] bg-[#1a1a1a] flex items-center justify-center text-xs text-[#555]" data-sd-id="145">A</div>
+              <div class="w-8 h-8 rounded-full border border-[#444] bg-[#1a1a1a] flex items-center justify-center text-xs text-[#555]" data-sd-id="146">B</div>
+              <div class="w-8 h-8 rounded-full border border-[#444] bg-[#1a1a1a] flex items-center justify-center text-xs text-[#555]" data-sd-id="147">X</div>
+              <div class="w-8 h-8 rounded-full border border-[#444] bg-[#1a1a1a] flex items-center justify-center text-xs text-[#555]" data-sd-id="148">Y</div>
+            </div>
+            
+            <div class="super-buttons flex gap-8 items-center" data-sd-id="149">
+              <div class="w-16 h-16 rounded-full border-4 border-[#333]" data-sd-id="150">A</div>
+              <div class="w-16 h-16 rounded-full border-4 border-[#333]" data-sd-id="151">B</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer-bar" data-sd-id="152">
+        <div class="status-area" data-sd-id="153">
+          <iconify-icon icon="fluent:warning-20-regular"></iconify-icon>
+          <span data-sd-id="154">Offline Preview / Read-only. Create a profile to begin editing. (0 pending edits)</span>
+        </div>
+        
+        <div class="action-btns" data-sd-id="155">
+          <button class="btn btn-secondary btn-enabled" id="snapshot-backup">Export Snapshot…</button>
+          <button class="btn btn-secondary" disabled="" data-sd-id="156">Discard</button>
+          <button class="btn btn-primary" disabled="" data-sd-id="157">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body></html>

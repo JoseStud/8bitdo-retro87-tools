@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+backups/
+.superdesign/tmp/
+*.png
+.superdesign/resume.json

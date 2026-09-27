@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+retro87_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -x "$retro87_dir/.venv/bin/python" ]]; then
+    echo "Install the GUI environment first: python -m venv .venv && .venv/bin/pip install -r requirements-gui.txt" >&2
+    exit 1
+fi
+exec "$retro87_dir/.venv/bin/python" "$retro87_dir/retro87_gui.py" "$@"

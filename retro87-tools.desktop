@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Retro 87 Tools
+Comment=Unofficial 8BitDo Retro 87 (Mecha BREAK) configuration
+Exec=@DIR@/run-gui
+Path=@DIR@
+Icon=input-keyboard
+Terminal=false
+Categories=Settings;HardwareSettings;
+StartupNotify=true
