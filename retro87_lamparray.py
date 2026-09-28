@@ -64,7 +64,10 @@ def find_interface(sysfs=Path("/sys/bus/usb/devices")):
             continue
         for interface in sorted(device.glob(device.name + ":*")):
             try:
-                if (interface / "bInterfaceClass").read_text().strip() != "03" or (interface / "driver").exists():
+                # Unbound, or claimed through usbfs (by us or another LampArray client).
+                driver = interface / "driver"
+                if (interface / "bInterfaceClass").read_text().strip() != "03" or (
+                        driver.exists() and driver.resolve().name != "usbfs"):
                     continue
                 endpoints = [(e / "direction").read_text().strip() for e in interface.glob("ep_*")]
                 if endpoints == ["out"]:
@@ -211,9 +214,8 @@ class LampArraySink:
         self.factory = factory
         self.device = None
 
-    @staticmethod
-    def available():
-        return find_interface() is not None
+    def available(self):
+        return self.device is not None or find_interface() is not None
 
     def set_leds(self, colors):
         try:

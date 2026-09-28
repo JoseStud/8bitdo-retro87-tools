@@ -62,5 +62,39 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(exits), 1)
 
 
+class DiscoveryTests(unittest.TestCase):
+    def sysfs(self, driver=None):
+        import tempfile
+        from pathlib import Path
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        device = root / "5-2"
+        for name, value in (("idVendor", "2dc8"), ("idProduct", "2028"), ("busnum", "5"), ("devnum", "3")):
+            (device / name).parent.mkdir(parents=True, exist_ok=True)
+            (device / name).write_text(value + "\n")
+        interface = device / "5-2:1.3"
+        (interface / "ep_06").mkdir(parents=True)
+        (interface / "ep_06/direction").write_text("out\n")
+        (interface / "bInterfaceClass").write_text("03\n")
+        (interface / "bInterfaceNumber").write_text("03\n")
+        if driver:
+            (root / driver).mkdir()
+            (interface / "driver").symlink_to(root / driver)
+        return root
+
+    def test_found_unbound_or_claimed_by_usbfs(self):
+        for driver in (None, "usbfs"):
+            self.assertEqual(lamparray.find_interface(self.sysfs(driver)), ("/dev/bus/usb/005/003", 3))
+
+    def test_skipped_when_a_kernel_driver_owns_it(self):
+        self.assertIsNone(lamparray.find_interface(self.sysfs("usbhid")))
+
+    def test_open_sink_stays_available(self):
+        sink = lamparray.LampArraySink()
+        sink.device = object()
+        self.assertTrue(sink.available())
+
+
 if __name__ == "__main__":
     unittest.main()
