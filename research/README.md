@@ -240,4 +240,5 @@ prove what the keyboard stored.
 Persistence: open. The per-key pattern survived switching the keyboard off
 and on, but the lights never went dark, so power was probably not removed. A
 test with no USB cable and the lights fully dark (or a flat battery) is still
-needed.
+needed. Live wallpaper mirroring waits on this answer; see
+[issue #1](https://github.com/JoseStud/8bitdo-retro87-tools/issues/1).

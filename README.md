@@ -15,6 +15,9 @@ What works on the keyboard (hardware-verified, 2026-09-27):
 - **Per-key RGB lighting** for all 87 keys (91 LEDs), with static, breathing,
   starlight, freeze and off effects, brightness, speed and star count.
 - Backup before every write, and verification by readback after it.
+- **KDE Plasma**: a tray widget, the keyboard in Plasma's Brightness applet and
+  brightness keys, and lighting that follows the
+  [waywallen](https://github.com/waywallen/waywallen) wallpaper.
 
 Not yet available: hardware macros, mouse/media/modifier-combination
 assignments, sleep settings and firmware updates. Key remapping and sound-level
@@ -87,25 +90,36 @@ built-in preset switches back.
 ./install-kde.sh --uninstall
 ```
 
-- **Tray widget "Retro 87 Lighting"**: effect, brightness, speed, colours and a
-  per-key on/off switch. Enable it under Configure System Tray → Entries. Its
-  settings button opens the full app.
+After installing, everything starts with each Plasma login. Nothing needs to
+be run by hand.
+
+- **Tray widget "Retro 87 Lighting"** (keyboard icon): Match wallpaper,
+  per-key on/off, effect, brightness, speed and colours. Its refresh button
+  re-reads the keyboard; its settings button opens the full app. To show it:
+  right-click the system tray arrow → Configure System Tray → Entries →
+  Retro 87 Lighting → Always shown. If it is missing after an install or
+  update, restart the shell with `systemctl --user restart plasma-plasmashell`.
 - **Keyboard backlight**: the keyboard appears in Plasma's Brightness applet
   and responds to the keyboard-brightness keys (5 steps). The slider sets the
   current preset's brightness, or the per-key brightness in per-key mode.
-
 - **Match wallpaper** (tray widget): follows the wallpaper playing in
-  [waywallen](https://github.com/waywallen/waywallen) and updates whenever it
-  changes. *Colour* puts the wallpaper's main colour into the current effect
-  (the highlight for Resonance/Starlight; effects without a colour switch to
-  Solid). *Picture on keys* spreads the wallpaper over the keys as per-key
-  colours. Colours come from waywallen's preview image for each wallpaper.
+  [waywallen](https://github.com/waywallen/waywallen) (including Wallpaper
+  Engine scenes it plays) and updates whenever the wallpaper changes.
+  *Colour* puts the wallpaper's main colour into the current effect (a dim
+  background and accent highlight for Resonance/Starlight; effects without a
+  colour switch to Solid). *Picture on keys* spreads the wallpaper over the
+  keys as per-key colours. Colours come from waywallen's preview image for
+  each wallpaper. The choice is remembered in
+  `~/.config/retro87-tools/service.json`. Writes are limited to one per
+  wallpaper change, at most every 10 seconds; watch them with
+  `journalctl --user -u retro87 -f`.
 
-  It cannot mirror an animated wallpaper frame by frame. The keyboard
-  displays at most about 3 per-key updates per second, and it may store each
-  one permanently (not yet confirmed), so streaming could wear its storage. For motion, use Colour with one of the keyboard's
-  own animated effects (Breathing, Starlight, Ripple). Writes are limited to
-  one per wallpaper change, at most every 10 seconds.
+  Not live yet: it does not follow the animation of a playing wallpaper. The
+  keyboard displays at most about 3 per-key updates per second, and whether
+  each update is stored permanently (which streaming could wear out) is still
+  unknown. See [issue #1](https://github.com/JoseStud/8bitdo-retro87-tools/issues/1).
+  For motion now, use Colour with one of the keyboard's own animated effects
+  (Breathing, Starlight, Ripple), which move without any writes.
 
 Both use a user service, `retro87_service.py` (`systemctl --user status retro87`,
 log in `journalctl --user -u retro87`). It opens the dongle only for each

@@ -22,6 +22,14 @@
 - [x] Validate lighting writes and restoration on hardware (2026-09-27; see
       [research/README.md](research/README.md)). Writes are enabled by default;
       `--read-only` disables them.
+- [x] KDE Plasma integration: session service, tray widget, keyboard backlight
+      in the Brightness applet and brightness keys (2026-09-27).
+- [x] Match the waywallen wallpaper (accent colour or per-key picture), updated
+      on each wallpaper change (2026-09-27).
+- [x] Measure per-key write timing on hardware; chunk delay cut from 100 ms to
+      20 ms (2026-09-27; see research/README.md).
+- [ ] Live wallpaper mirroring: blocked on the storage-persistence test
+      ([issue #1](https://github.com/JoseStud/8bitdo-retro87-tools/issues/1)).
 - [ ] Decode advanced mappings (mouse, media, combinations), macros and sleep settings.
 - [ ] Validate key remapping and sound level on hardware.
 - [ ] Complete manual keyboard/accessibility review.
@@ -31,7 +39,8 @@ via the Profile button, breathing colour/brightness/speed, the vendor default
 profile image and all per-key lighting effects work. The first solid-colour
 test looked like a failure. The keyboard was actually showing its onboard
 lighting (inactive profile, onboard solid brightness zero), as recorded in
-research/README.md and PROTOCOL.md. 51 automated tests pass.
+research/README.md and PROTOCOL.md. 68 automated tests pass (as of the
+KDE and wallpaper work).
 
 ### Review interaction fix and testing (2026-09-27)
 
