@@ -2,7 +2,8 @@
 
 Native Linux desktop app and dependency-free Python CLI for the
 **8BitDo Retro 87 Mechanical Keyboard – Mecha BREAK: Panther**, over its 2.4 GHz
-dongle (`2dc8:202e`, USB name `8BitDo Retro 87 Adapter X`). The protocol was
+dongle (`2dc8:202e`, USB name `8BitDo Retro 87 Adapter X`) or its USB cable
+(`2dc8:2028`, `8BitDo Retro 87 Keyboard X`). The protocol was
 recovered by static analysis of the official Ultimate Software V2 (Windows,
 v1.35) and verified on hardware. Unofficial; not affiliated with 8BitDo.
 
@@ -22,8 +23,10 @@ What works on the keyboard (hardware-verified, 2026-09-27):
 Not yet available: hardware macros, mouse/media/modifier-combination
 assignments, sleep settings and firmware updates. Key remapping and sound-level
 writes are decoded from the vendor app and covered by tests, but have not been
-checked on hardware. Only the wireless dongle is supported (no Bluetooth or
-wired USB), and only this model.
+checked on hardware. The dongle and the USB cable are supported (not
+Bluetooth), and only this model. Both expose the same configuration interface;
+when the cable is plugged in the tools use it, because the dongle then no longer
+reaches the keyboard.
 
 ## The one thing to know: activate the profile
 
@@ -44,8 +47,9 @@ the factory reset.
 
 ## Install
 
-Requires Linux, Python 3.9+, and read/write access to the dongle's
-`/dev/hidraw*` node for your user. Never run the tools as root.
+Requires Linux, Python 3.9+, and read/write access to the dongle's or wired
+keyboard's `/dev/hidraw*` node for your user (`install-kde.sh` adds a udev rule
+for the wired keyboard). Never run the tools as root.
 
 ```sh
 git clone https://github.com/JoseStud/8bitdo-retro87-tools.git
@@ -114,18 +118,96 @@ be run by hand.
   wallpaper change, at most every 10 seconds; watch them with
   `journalctl --user -u retro87 -f`.
 
-  Not live yet: it does not follow the animation of a playing wallpaper. The
-  keyboard displays at most about 3 per-key updates per second, and whether
-  each update is stored permanently (which streaming could wear out) is still
-  unknown. See [issue #1](https://github.com/JoseStud/8bitdo-retro87-tools/issues/1).
-  For motion now, use Colour with one of the keyboard's own animated effects
-  (Breathing, Starlight, Ripple), which move without any writes.
+  **Live animation** is available with the optional capture bridge below. It
+  follows the rendered wallpaper, including video and scene motion, and needs
+  the keyboard's **USB cable**: frames go to its HID LampArray (the Windows
+  Dynamic Lighting interface) as runtime colours, up to 10 per second, and the
+  keyboard returns to its own lighting when live mode stops. The 2.4 GHz dongle
+  has no LampArray; there, each per-key write erases the keyboard's flash
+  (hardware-proven, see the [storage wear assessment](research/storage-wear.md)),
+  so that fallback needs `--experimental-live` and should not be used for
+  continuous streaming.
 
 Both use a user service, `retro87_service.py` (`systemctl --user status retro87`,
-log in `journalctl --user -u retro87`). It opens the dongle only for each
-change, reads it first, writes the changed bytes, verifies them, and saves one
+log in `journalctl --user -u retro87`). It opens the keyboard (cable or dongle)
+only for each change, reads it first, writes the changed bytes, verifies them, and saves one
 backup per session before its first write. The D-Bus API
 (`io.github.JoseStud.Retro87`) is described at the top of the file.
+
+### Live mirroring
+
+Wallpaper capture uses `grabToImage` on Plasma's Waywallen surface. It captures
+the animation itself, without application windows, desktop icons or panels.
+Install the optional bridge with:
+
+```sh
+.venv/bin/python install-live-wallpaper.py
+```
+
+This copies the system Waywallen wallpaper to your user wallpaper directory and
+adds the capture component. It refuses to overwrite an unmanaged user copy.
+Log out and back in to load it. Re-run the installer after updating Waywallen;
+the local copy otherwise shadows system updates. Remove it with
+`.venv/bin/python install-live-wallpaper.py --uninstall`, then log in again.
+
+Connect the keyboard with its USB cable. `install-kde.sh` (without
+`--no-backlight`) installs the udev rule that gives your session access to the
+LampArray interface; re-run it once after updating. Then choose **Live
+animation (USB)** in Match wallpaper. Unplugging the cable stops live mode with
+an error instead of falling back to flash writes.
+
+Only to allow the flash-wearing 2.4 GHz fallback, run `systemctl --user edit retro87`
+and add this override (replace the paths with your checkout's absolute paths):
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/absolute/path/.venv/bin/python /absolute/path/retro87_service.py --experimental-live
+```
+
+Restart with `systemctl --user restart retro87`. From a terminal:
+
+```sh
+busctl --user call io.github.JoseStud.Retro87 /io/github/JoseStud/Retro87 io.github.JoseStud.Retro87 Set ss wallpaper live
+```
+
+The first screen requesting capture is selected; add `--wallpaper-screen DP-1`
+to the service arguments to select a specific Qt screen name. Captures preserve
+the screen aspect ratio and are centre-cropped to the keyboard layout. Frames
+are at most 192 pixels on their longest edge, stored temporarily in a private
+runtime directory, and removed after consumption. There is one capture in
+flight, no frame queue, and identical mapped colours cause no keyboard access.
+Locking pauses delivery; an unavailable lock service also pauses it. Any device
+failure stops the stream until live mode is reselected. Manual preset/colour
+changes stop live mode. Over USB, stopping returns the keyboard to its own
+lighting; the 2.4 GHz fallback preserves brightness and leaves the last pattern.
+
+### Full-display mirror (draft)
+
+`retro87_display.py` samples the entire monitor, including applications and
+windows. The entire frame maps to the keyboard, including its top and bottom
+edges, without a centre crop. On Wayland, Qt's ScreenCast/PipeWire backend opens the desktop portal
+screen picker; choose a monitor. This is independent of the Waywallen bridge.
+The default only prints per-key colour JSON, with **no keyboard writes**:
+
+```sh
+.venv/bin/python retro87_display.py
+```
+
+With the keyboard on its USB cable (or the experimental option above), send it to the keyboard:
+
+```sh
+.venv/bin/python retro87_display.py --apply
+```
+
+Ctrl+C stops capture and disables display mirroring. Selecting a different
+lighting mode also stops the runner when its next frame arrives. It shares the
+wallpaper mode's frame limit (10/s over USB), lock checks and failure handling.
+On X11, `--screen NAME` selects a monitor; Wayland selection is handled by the
+portal. Full-display mode is never restored automatically at service startup.
+This draft requires Qt Multimedia with the FFmpeg backend and a working
+ScreenCast portal/PipeWire on Wayland. Native monitor capture and sustained
+hardware output still require an interactive validation run.
 
 How the backlight works: the root step loads the kernel's `uleds` module at
 boot and adds a udev rule. The rule lets your session create a userspace LED
@@ -169,7 +251,7 @@ restore them with `led` or the GUI.
 ## Tests
 
 ```sh
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model test_gui test_service test_wallpaper   # 68 tests, no hardware
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model test_gui test_service test_wallpaper test_live test_lamparray   # no hardware
 ```
 
 The tests cover packet encoding, acknowledgment/readback handling, every

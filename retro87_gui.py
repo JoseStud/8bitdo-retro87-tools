@@ -41,6 +41,7 @@ class Controller(QObject):
         self.allow_writes = allow_writes
         self.device_factory = device_factory
         self.live = False
+        self.connection = ""
         self.busy = False
         self.failure = False
         self.message = "Offline snapshot — no device I/O" if snapshot else "Connect to read the keyboard, or open a snapshot."
@@ -59,6 +60,7 @@ class Controller(QObject):
         }
         dirty = bool(self.draft and self.draft.dirty)
         result.update({"loaded": self.draft is not None, "live": self.live, "busy": self.busy,
+                       "connection": self.connection,
                        "dirty": dirty, "message": self.message, "error": self.error,
                        "canApply": dirty and self.live and self.allow_writes and not self.busy and not self.failure,
                        "writesEnabled": self.allow_writes, "failure": self.failure,
@@ -129,11 +131,12 @@ class Controller(QObject):
         self.live = False
         def read():
             with self.device_factory(writable=False) as device:
-                return Snapshot.read(device)
-        def done(snapshot):
+                return Snapshot.read(device), getattr(device, "connection", "")
+        def done(result):
+            snapshot, self.connection = result
             self.draft = Draft(snapshot)
             self.live, self.failure = True, False
-            self.message = "Dongle read successfully"
+            self.message = f"Read over the {self.connection or 'keyboard connection'}"
         self._run(read, done)
 
     @staticmethod

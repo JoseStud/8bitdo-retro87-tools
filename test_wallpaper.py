@@ -39,6 +39,15 @@ class WallpaperTests(unittest.TestCase):
         self.assertEqual(r, 255)
         self.assertLess(g, 180 * 255 // 200)  # More saturated than the input.
 
+    def test_full_frame_mapping_keeps_top_and_bottom_edges(self):
+        grid = [[(255, 0, 0)] * 96 for _ in range(12)]
+        grid += [[(0, 255, 0)] * 96 for _ in range(40)]
+        grid += [[(0, 0, 255)] * 96 for _ in range(12)]
+        colors = wallpaper.key_colors(grid, crop=False)
+        self.assertEqual(colors["esc"], "#ff0000")
+        self.assertEqual(colors["space"], "#0000ff")
+        self.assertNotEqual(wallpaper.key_colors(grid)["esc"], colors["esc"])
+
     def test_wallpaper_info_reads_the_library_read_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "waywallen-v2.db"

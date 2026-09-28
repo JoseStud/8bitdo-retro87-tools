@@ -227,7 +227,8 @@ at a fixed rate and observed on the keys:
 | 2 | Every change shown |
 
 The keyboard acknowledges faster updates but needs about 250–330 ms to apply
-each one. Whether that time is spent writing to permanent storage is not known.
+each one. Each write erases and reprograms flash: the `0x0d` prepare alone
+erases the stored block (see [storage-wear.md](storage-wear.md)).
 
 Reads come from the dongle. With the keyboard switched off (its lights stayed
 on), reads of the profile and per-key regions were still answered in about
@@ -237,8 +238,14 @@ the keyboard is connected that copy tracks it (Profile-button and
 lighting-key changes appear in reads), but a readback does not by itself
 prove what the keyboard stored.
 
-Persistence: open. The per-key pattern survived switching the keyboard off
-and on, but the lights never went dark, so power was probably not removed. A
-test with no USB cable and the lights fully dark (or a flat battery) is still
-needed. Live wallpaper mirroring waits on this answer; see
+Persistence follow-up (2026-09-27): the owner reports that the custom pattern
+survived an off/on cycle with the USB cable disconnected, all lights out,
+and the dongle unplugged at startup. This strongly supports keyboard-local
+retention, but does not identify when data is saved or measure flash wear.
+The original test, whose lights never went dark, was inconclusive.
+See [storage-wear.md](storage-wear.md) for the evidence, remaining limits and
+the direct-USB LampArray investigation path. Configuration-based streaming
+should remain off for normal use; the explicit `--experimental-live` option
+does not establish endurance safety. No continuous hardware stream was run
+to validate the implementation. See
 [issue #1](https://github.com/JoseStud/8bitdo-retro87-tools/issues/1).

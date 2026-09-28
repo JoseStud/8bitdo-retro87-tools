@@ -5,3 +5,8 @@ KERNEL=="uleds", SUBSYSTEM=="misc", TAG+="uaccess"
 # Let the service show the keyboard's real brightness in that LED. UPower has no
 # capabilities, so it writes through the root group rather than as a privileged root.
 ACTION=="add", SUBSYSTEM=="leds", KERNEL=="retro87::kbd_backlight", RUN+="/usr/bin/chown @USER@:root /sys/class/leds/%k/brightness", RUN+="/usr/bin/chmod 0664 /sys/class/leds/%k/brightness"
+# Let the session service stream live colours to the wired keyboard's HID LampArray
+# (retro87_lamparray.py). Linux leaves that interface unbound, so it is reached via usbfs.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2dc8", ATTR{idProduct}=="2028", TAG+="uaccess"
+# Let the service and app change settings over the USB cable (same protocol as the dongle).
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2dc8", ATTRS{idProduct}=="2028", TAG+="uaccess"

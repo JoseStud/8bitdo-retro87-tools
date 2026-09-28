@@ -1,4 +1,5 @@
-"""Linux HID access for the Mecha BREAK Retro 87 (2dc8:202e dongle).
+"""Linux HID access for the Mecha BREAK Retro 87, over its 2.4 GHz dongle (2dc8:202e)
+or its USB cable (2dc8:2028); both expose the same configuration interface.
 
 All changes are previews unless --apply is supplied. No third-party dependencies.
 """
@@ -15,6 +16,9 @@ import sys
 import uuid
 
 DESCRIPTOR = bytes.fromhex("06a0ff0901a1018502150026ff00190129027508953f81028581150026ff00190129027508953f9182c0")
+# HID product id -> connection, in order of preference: while the cable is plugged
+# in, the dongle's configuration requests no longer reach the keyboard.
+CONNECTIONS = {"00002028": "USB cable", "0000202E": "2.4 GHz dongle"}
 PROFILE_SIZE = 0x5fc
 PROFILE_FLAG = 0x20200902
 PROFILE_ACTIVE_TIP = ("The profile is not active (byte 0x24 is not 1): the keyboard ignores stored lighting "
@@ -328,19 +332,27 @@ def show_status(profile):
                 label = next((k for k, v in TARGETS.items() if v == target), hex(target))
                 print(f"  {item['name']} -> {label} (type {kind})")
 
+def find_config_node(sysfs=Path("/sys/class/hidraw")):
+    """(/dev/hidrawN, connection name) of the configuration interface, preferring the cable."""
+    nodes = {product: [] for product in CONNECTIONS}
+    for node in sorted(sysfs.glob("hidraw*")):
+        info = (node / "device/uevent").read_text()
+        for product in CONNECTIONS:
+            if f"HID_ID=0003:00002DC8:{product}" in info and (node / "device/report_descriptor").read_bytes() == DESCRIPTOR:
+                nodes[product].append("/dev/" + node.name)
+    product = next((product for product, found in nodes.items() if found), None)
+    if product is None or len(nodes[product]) != 1:
+        raise RuntimeError("Expected one Retro 87 configuration interface (USB cable or 2.4 GHz dongle); "
+                           f"found {sum(nodes.values(), [])}")
+    return nodes[product][0], CONNECTIONS[product]
+
+
 class Keyboard:
     def __init__(self, writable=False):
         self.writable = writable
 
     def __enter__(self):
-        nodes = []
-        for node in Path("/sys/class/hidraw").glob("hidraw*"):
-            info = (node / "device/uevent").read_text()
-            if "HID_ID=0003:00002DC8:0000202E" in info and (node / "device/report_descriptor").read_bytes() == DESCRIPTOR:
-                nodes.append("/dev/" + node.name)
-        if len(nodes) != 1:
-            raise RuntimeError(f"Expected one 2dc8:202e configuration interface; found {nodes}")
-        self.path = nodes[0]
+        self.path, self.connection = find_config_node()
         self.fd = os.open(self.path, os.O_RDWR | os.O_NONBLOCK)
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -127,14 +127,22 @@ PlasmoidItem {
                         { value: "off", text: i18n("Off") },
                         { value: "color", text: i18n("Colour") },
                         { value: "keys", text: i18n("Picture on keys") }
-                    ]
+                    ].concat(st.wallpaperLiveAvailable ? [{ value: "live", text: st.wallpaperLiveUsb ? i18n("Live animation (USB)") : i18n("Live animation (experimental, wears flash)") }] : [])
+                     .concat(st.wallpaperSync === "display" ? [{ value: "display", text: i18n("Full display (experimental)") }] : [])
                     textRole: "text"
                     valueRole: "value"
-                    currentIndex: ["off", "color", "keys"].indexOf(st.wallpaperSync || "off")
+                    currentIndex: ["off", "color", "keys", "live", "display"].indexOf(st.wallpaperSync || "off")
                     onActivated: root.set("wallpaper", currentValue)
                     PlasmaComponents3.ToolTip {
                         text: i18n("Follow the waywallen wallpaper: its main colour in the current effect, or the picture spread over the keys. Updates when the wallpaper changes.")
                     }
+                }
+                Item { visible: !!st.wallpaperLiveError; implicitWidth: 1 }
+                PlasmaComponents3.Label {
+                    Layout.fillWidth: true
+                    visible: !!st.wallpaperLiveError
+                    text: st.wallpaperLiveError || ""
+                    wrapMode: Text.WordWrap
                 }
                 Item { visible: !!st.wallpaperName && st.wallpaperSync !== "off"; implicitWidth: 1 }
                 PlasmaComponents3.Label {

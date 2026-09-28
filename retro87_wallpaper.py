@@ -16,7 +16,7 @@ from retro87_layout import keyboard_layout
 WAYWALLEN_SERVICE = "org.waywallen.waywallen.Daemon"
 WAYWALLEN_PATH = "/org/waywallen/waywallen/Daemon"
 WAYWALLEN_IFACE = "org.waywallen.waywallen.Daemon1"
-SYNC_MODES = ("off", "color", "keys")
+SYNC_MODES = ("off", "color", "keys", "live", "display")
 
 
 def database_path():
@@ -86,14 +86,16 @@ def accent_color(grid):
     return vivid(tuple(c / total[0] for c in total[1:]))
 
 
-def key_colors(grid):
-    """Average the picture under each key: the image is centre-cropped to the keyboard's shape."""
+def key_colors(grid, *, crop=True):
+    """Average the picture under each key; crop to the board, or fit the entire frame."""
     keys = [k for k in keyboard_layout() if k["key"] in LED_KEYS]
     board_w = max(k["x"] + k["units"] for k in keys)
     board_h = max(k["y"] for k in keys) + 1
     rows, cols = len(grid), len(grid[0])
     # Crop the grid to the keyboard's aspect ratio (cover, like a wallpaper).
-    if cols / rows > board_w / board_h:
+    if not crop:
+        width, height = cols, rows
+    elif cols / rows > board_w / board_h:
         width, height = rows * board_w / board_h, rows
     else:
         width, height = cols, cols * board_h / board_w

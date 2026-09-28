@@ -40,12 +40,15 @@ if [[ "${1:-}" != "--no-backlight" ]]; then
     echo "Backlight setup needs sudo once, to:"
     echo "  - load the kernel's uleds module now and at boot ($modules)"
     echo "  - let your session create the keyboard-backlight LED ($rules)"
+    echo "  - let your session use the keyboard over its USB cable: settings and live colours ($rules)"
     render "$dir/kde/70-retro87-backlight.rules" | sudo tee "$rules" >/dev/null
     echo uleds | sudo tee "$modules" >/dev/null
     sudo udevadm control --reload
     # Already loaded after a kernel update, modprobe cannot find the old kernel's modules.
     [[ -d /sys/module/uleds ]] || sudo modprobe uleds
     sudo udevadm trigger --action=add /sys/devices/virtual/misc/uleds
+    sudo udevadm trigger --action=change --subsystem-match=usb --attr-match=idVendor=2dc8 --attr-match=idProduct=2028
+    sudo udevadm trigger --action=change --subsystem-match=hidraw
 fi
 
 if kpackagetool6 -t Plasma/Applet -s "$plasmoid" >/dev/null 2>&1; then

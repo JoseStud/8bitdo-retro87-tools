@@ -176,5 +176,34 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 r.save_snapshot(path, self.profile, self.led)
 
+
+class ConnectionTests(unittest.TestCase):
+    def sysfs(self, nodes):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for name, product, descriptor in nodes:
+            device = Path(tmp.name) / name / "device"
+            device.mkdir(parents=True)
+            (device / "uevent").write_text(f"HID_ID=0003:00002DC8:{product}\n")
+            (device / "report_descriptor").write_bytes(descriptor)
+        return Path(tmp.name)
+
+    def test_cable_preferred_over_dongle(self):
+        import retro87_core as core
+        root = self.sysfs([("hidraw3", "0000202E", core.DESCRIPTOR), ("hidraw9", "00002028", core.DESCRIPTOR),
+                           ("hidraw8", "00002028", b"\x05\x01")])
+        self.assertEqual(core.find_config_node(root), ("/dev/hidraw9", "USB cable"))
+
+    def test_dongle_alone_and_ambiguity(self):
+        import retro87_core as core
+        root = self.sysfs([("hidraw3", "0000202E", core.DESCRIPTOR)])
+        self.assertEqual(core.find_config_node(root), ("/dev/hidraw3", "2.4 GHz dongle"))
+        root = self.sysfs([("hidraw3", "0000202E", core.DESCRIPTOR), ("hidraw4", "0000202E", core.DESCRIPTOR)])
+        with self.assertRaisesRegex(RuntimeError, "Expected one"):
+            core.find_config_node(root)
+        with self.assertRaisesRegex(RuntimeError, "Expected one"):
+            core.find_config_node(self.sysfs([]))
+
+
 if __name__ == "__main__":
     unittest.main()
