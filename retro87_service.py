@@ -1,7 +1,11 @@
 """Session D-Bus service for KDE Plasma: backend for the tray widget and keyboard-backlight bridge.
 
-The service owns no long-lived device handle: each call opens the keyboard (USB
-cable or 2.4 GHz dongle, see retro87_core.Keyboard), reads
+By default the service talks to the keyboard only through an OpenRGB SDK server
+(retro87_openrgb.py; install-kde.sh runs one as the user unit retro87-openrgb),
+so OpenRGB is the single program opening the hardware and its GUI can be used
+alongside the tray. With --direct it instead owns no long-lived device handle:
+each call opens the keyboard (USB cable or 2.4 GHz dongle, see
+retro87_core.Keyboard), reads
 the current configuration, writes only the changed ranges and verifies them by
 readback. One backup per service run is saved before its first write.
 
@@ -12,6 +16,10 @@ D-Bus (session bus), all string-typed so QML can call it without type wrappers:
     Set(s field, s value) -> s   state as JSON plus "ok" and "message"
         preset <name> | brightness 0-100 | speed 1-10 | color #RRGGBB |
         echo #RRGGBB | perkey on/off | wallpaper off/color/keys/live/display
+    PauseLive(s seconds) -> s   let another program use Direct: live colours stop and the
+                                lighting is handed back for up to 300 s; renew while
+                                running, it resumes by itself when the pause runs out
+    ResumeLive() -> s           end a pause early
     WallpaperFrameTarget(s screen) -> s   leased PNG path, or empty when paused
     DisplayFrameTarget() -> s             leased PNG path for the monitor runner
     WallpaperFrame(s path) -> s           consume a completed wallpaper capture
@@ -43,6 +51,7 @@ import time
 import uuid
 
 import retro87_core as protocol
+import retro87_openrgb as openrgb
 import retro87_wallpaper as wallpaper
 from retro87_lamparray import LampArraySink
 from retro87_live import LiveMirror
@@ -217,6 +226,9 @@ def main():
     parser.add_argument("--experimental-live-wallpaper", "--experimental-live", action="store_true",
                         help="Also allow live mode over 2.4 GHz (each frame erases the keyboard's flash)")
     parser.add_argument("--wallpaper-screen", default="", help="Capture this Qt screen name; default: first sender")
+    parser.add_argument("--direct", action="store_true",
+                        help="Open the keyboard directly instead of going through OpenRGB")
+    parser.add_argument("--openrgb-port", type=int, default=6742, help="OpenRGB SDK server port on localhost")
     args = parser.parse_args()
 
     from PySide6.QtCore import ClassInfo, QCoreApplication, QObject, QSocketNotifier, QTimer, Slot, QStandardPaths
@@ -321,7 +333,7 @@ def main():
                 self.mode = "off"
             self.live = LiveMirror(controller, QStandardPaths.writableLocation(QStandardPaths.RuntimeLocation),
                                    allowed=args.experimental_live_wallpaper, screen=args.wallpaper_screen,
-                                   lamps=LampArraySink())
+                                   lamps=LampArraySink() if args.direct else openrgb.LampSink(controller))
             try:
                 self.live.set_enabled(self.mode == "live")
             except ValueError:
@@ -343,6 +355,9 @@ def main():
                 raise ValueError(f"Wallpaper sync takes {', '.join(wallpaper.SYNC_MODES)}")
             self.live.set_enabled(mode in ("live", "display"))
             self.live.crop = mode != "display"
+            if mode in ("live", "display") and hasattr(self.live.lamps, "takeover"):
+                # Choosing live colours explicitly wins over a stale Direct left by another client.
+                self.live.lamps.takeover = True
             self.mode = mode
             self.later.stop()
             self.settings.parent.mkdir(parents=True, exist_ok=True)
@@ -423,6 +438,7 @@ def main():
                                    wallpaperLiveUsb=usb,
                                    wallpaperLiveError=sync.live.error if sync else "",
                                    wallpaperLiveFrames=sync.live.frames if sync else 0,
+                                   wallpaperLivePaused=round(sync.live.paused()) if sync else 0,
                                    wallpaperScreen=sync.live.owner if sync else None))
 
         def unlocked(self):
@@ -431,6 +447,19 @@ def main():
                                   "org.freedesktop.ScreenSaver", QDBusConnection.sessionBus())
             reply = lock.call("GetActive")
             return not reply.errorName() and reply.arguments() == [False]
+
+        @Slot(str, result=str)
+        def PauseLive(self, seconds):
+            try:
+                self.wallpaper.live.pause(float(seconds))
+                return self._state(self.controller.status())
+            except ValueError as exc:
+                return self._state(self.controller.status(), str(exc))
+
+        @Slot(result=str)
+        def ResumeLive(self):
+            self.wallpaper.live.resume()
+            return self._state(self.controller.status())
 
         @Slot(str, result=str)
         def WallpaperFrameTarget(self, screen):
@@ -489,7 +518,7 @@ def main():
                 return self._reply(self.controller.status(), str(exc))
 
     app = QCoreApplication(sys.argv)
-    controller = Controller()
+    controller = Controller() if args.direct else openrgb.Controller(openrgb.Client(port=args.openrgb_port))
     service = Service(controller)
     if not args.no_backlight:
         try:
@@ -502,6 +531,24 @@ def main():
     log("Keyboard:", controller.error or "connected")
     service.wallpaper = WallpaperSync(controller, service.changed)
     app.aboutToQuit.connect(service.wallpaper.live.close)
+
+    def watch_openrgb():
+        # OpenRGB announces device-list changes (detection finished, cable plugged in or
+        # out); re-read then, and re-apply wallpaper colours once the keyboard is back.
+        was_connected = controller.status()["connected"]
+        if controller.client.sync():
+            state = controller.refresh()
+            if state["connected"] != was_connected:
+                log("Keyboard:", controller.error or f"connected through OpenRGB ({state['connection']})")
+                if state["connected"]:
+                    service.wallpaper.applied = None
+                    service.wallpaper.apply()
+            service.changed()
+
+    if not args.direct:
+        openrgb_watch = QTimer(interval=5000)
+        openrgb_watch.timeout.connect(watch_openrgb)
+        openrgb_watch.start()
 
     bus = QDBusConnection.sessionBus()
     if not bus.registerObject(OBJECT_PATH, service, QDBusConnection.RegisterOption.ExportAllSlots):

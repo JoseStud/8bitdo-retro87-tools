@@ -20,6 +20,7 @@ class LiveMirror:
     INTERVAL = 0.5
     USB_INTERVAL = 0.1
     LEASE = 5.0
+    MAX_PAUSE = 300.0
 
     def __init__(self, controller, runtime_dir, *, allowed=False, screen="", clock=time.monotonic, lamps=None):
         self.controller, self.lamps = controller, lamps
@@ -35,6 +36,27 @@ class LiveMirror:
         self.owner_seen = 0.0
         self.pending = None
         self.directory = None
+        self.paused_until = 0.0
+
+    def pause(self, seconds):
+        """Let another program use the keyboard's live colours for a while (renewable).
+
+        Hands the lighting back now; frames resume on their own when the pause runs out,
+        so a program that crashes cannot block live mode for longer than one lease.
+        """
+        if not 0 < seconds <= self.MAX_PAUSE:
+            raise ValueError(f"Pause takes 0–{self.MAX_PAUSE:.0f} seconds")
+        self.paused_until = self.clock() + seconds
+        if self.lamps is not None:
+            self.lamps.close()
+        self.last_colors = None
+
+    def resume(self):
+        self.paused_until = 0.0
+
+    def paused(self):
+        """Seconds of pause left (0 when not paused)."""
+        return max(0.0, self.paused_until - self.clock())
 
     def set_enabled(self, enabled):
         if enabled and not self.allowed and not self.usb():
@@ -61,7 +83,7 @@ class LiveMirror:
 
     def target(self, screen, *, unlocked):
         now = self.clock()
-        if not self.enabled or not unlocked or self.error or now < self.next_frame:
+        if not self.enabled or not unlocked or self.error or now < self.next_frame or self.paused():
             return ""
         if not screen or len(screen) > 256 or (self.screen and screen != self.screen):
             return ""
@@ -89,7 +111,7 @@ class LiveMirror:
         self.pending = None
         try:
             now = self.clock()
-            if (not self.enabled or not unlocked or self.error or
+            if (not self.enabled or not unlocked or self.error or self.paused() or
                     now - created >= self.LEASE or now < self.next_frame):
                 return False
             from PySide6.QtGui import QImageReader

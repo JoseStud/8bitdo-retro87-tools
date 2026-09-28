@@ -89,13 +89,33 @@ built-in preset switches back.
 ## KDE Plasma integration
 
 ```sh
-./install-kde.sh                  # asks for sudo once, for the keyboard backlight
-./install-kde.sh --no-backlight   # tray widget only, no root
+OPENRGB=/path/to/openrgb ./install-kde.sh   # asks for sudo once, for udev rules and the backlight
+./install-kde.sh --no-backlight             # no root; keeps previously installed udev rules
+./install-kde.sh --direct                   # without OpenRGB (see below)
 ./install-kde.sh --uninstall
 ```
 
 After installing, everything starts with each Plasma login. Nothing needs to
 be run by hand.
+
+**OpenRGB is the only program that opens the keyboard** (details in
+[OPENRGB.md](OPENRGB.md)). The installer runs
+OpenRGB's SDK server as the user unit `retro87-openrgb` (localhost only), and
+the tray service sends every change through it. The OpenRGB GUI can be used at
+the same time: started while the server runs, it connects to it instead of
+opening devices. This needs an OpenRGB build with the Retro 87 support (the
+8BitDo controller, and the HID LampArray changes for the USB cable); the
+binary comes from `$OPENRGB` or `PATH`. In OpenRGB the keyboard is one device,
+**8BitDo Retro 87 Mecha BREAK**: the stored effects and the stored per-key
+picture (*Custom*) work over the dongle or the cable and are saved on the
+keyboard; over the cable it also has **Direct**, runtime per-key colours
+through the keyboard's HID LampArray interface that are never saved. Selecting
+any other mode gives the lighting back to the keyboard; returning to the
+unchanged effect that was active before Direct saves nothing. Live animation
+uses Direct, and brightness changes while it runs only dim the live colours. `--direct` installs the service without OpenRGB; it
+then opens the keyboard itself, as earlier versions did. The desktop app and
+CLI below always open the keyboard directly; avoid changing settings in them
+and in OpenRGB at the same moment.
 
 - **Tray widget "Retro 87 Lighting"** (keyboard icon): Match wallpaper,
   per-key on/off, effect, brightness, speed and colours. Its refresh button
@@ -129,9 +149,11 @@ be run by hand.
   continuous streaming.
 
 Both use a user service, `retro87_service.py` (`systemctl --user status retro87`,
-log in `journalctl --user -u retro87`). It opens the keyboard (cable or dongle)
-only for each change, reads it first, writes the changed bytes, verifies them, and saves one
-backup per session before its first write. The D-Bus API
+log in `journalctl --user -u retro87`). It sends each change to OpenRGB, which
+saves effects and the per-key picture on the keyboard; this path makes no
+backups. With `--direct` it instead opens the keyboard (cable or dongle) only for
+each change, reads it first, writes the changed bytes, verifies them, and saves
+one backup per session before its first write. The D-Bus API
 (`io.github.JoseStud.Retro87`) is described at the top of the file.
 
 ### Live mirroring
@@ -251,7 +273,7 @@ restore them with `led` or the GUI.
 ## Tests
 
 ```sh
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model test_gui test_service test_wallpaper test_live test_lamparray   # no hardware
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model test_gui test_service test_wallpaper test_live test_lamparray test_openrgb   # no hardware
 ```
 
 The tests cover packet encoding, acknowledgment/readback handling, every
@@ -262,6 +284,11 @@ mocks or an in-memory simulator.
 ## Documentation
 
 - [PROTOCOL.md](PROTOCOL.md): the complete protocol and hardware findings.
+- [OPENRGB.md](OPENRGB.md): OpenRGB as the single program driving the keyboard:
+  setup, the OpenRGB device and its modes, flash-wear protection, the tray
+  backend, the OpenRGB patch ([openrgb/retro87-openrgb.patch](openrgb/retro87-openrgb.patch)),
+  a flash-endurance estimate, and how to write your own lighting modes
+  ([examples/direct_wave.py](examples/direct_wave.py)).
 - [research/README.md](research/README.md): reproducible vendor analysis and the
   hardware test log.
 - [GUI_IMPLEMENTATION.md](GUI_IMPLEMENTATION.md): GUI status and remaining work.

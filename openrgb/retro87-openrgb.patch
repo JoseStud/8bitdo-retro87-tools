@@ -1,0 +1,2047 @@
+diff --git a/Controllers/HIDLampArrayController/HIDLampArrayController.cpp b/Controllers/HIDLampArrayController/HIDLampArrayController.cpp
+index eacd713..ec0a879 100644
+--- a/Controllers/HIDLampArrayController/HIDLampArrayController.cpp
++++ b/Controllers/HIDLampArrayController/HIDLampArrayController.cpp
+@@ -11,14 +11,86 @@
+ 
+ #include <cstdio>
+ #include <cstring>
++#include <unordered_map>
+ #include "hid_util.h"
+ #include "HIDLampArrayController.h"
+ #include "StringUtils.h"
+ 
+-HIDLampArrayController::HIDLampArrayController(hid_device *dev_handle, const char *path)
++#ifdef __linux__
++#include <libusb.h>
++
++#define HID_LAMPARRAY_USB_TIMEOUT   1000
++#define HID_REQUEST_GET_REPORT      0x01
++#define HID_REQUEST_SET_REPORT      0x09
++#define HID_REPORT_TYPE_FEATURE     0x03
++#define HID_DESCRIPTOR_TYPE_REPORT  0x22
++#endif
++
++/*---------------------------------------------------------*\
++| 8BitDo Retro 87 Keyboard X (wired): the firmware reports  |
++| some X positions 10x or 100x too large, the right arrow   |
++| at (0, 0), backspace with the backslash usage, and no     |
++| usage for pause, four of the five space bar lamps and the |
++| A and B keys.                                             |
++\*---------------------------------------------------------*/
++#define EIGHTBITDO_VID                  0x2DC8
++#define EIGHTBITDO_RETRO87_WIRED_PID    0x2028
++#define EIGHTBITDO_RETRO87_LAMP_COUNT   91
++
++HIDLampArrayController::HIDLampArrayController(hid_device *dev_handle, const char *path, unsigned short vid, unsigned short pid)
+ {
+     dev                                 = dev_handle;
+-    location                            = path;
++    location                            = "HID: " + std::string(path);
++    vendor_id                           = vid;
++    product_id                          = pid;
++#ifdef __linux__
++    usb_dev                             = NULL;
++    usb_interface                       = -1;
++#endif
++
++    Initialize();
++}
++
++#ifdef __linux__
++static std::string GetUSBString(libusb_device_handle *handle, uint8_t index)
++{
++    unsigned char string[128];
++
++    if(index == 0 || libusb_get_string_descriptor_ascii(handle, index, string, sizeof(string)) < 0)
++    {
++        return("");
++    }
++
++    return(std::string((const char *)string));
++}
++
++HIDLampArrayController::HIDLampArrayController(std::shared_ptr<libusb_context> context, libusb_device_handle *usb_handle, int interface_number, const std::string& path, unsigned short vid, unsigned short pid)
++{
++    dev                                 = NULL;
++    location                            = "USB: " + path;
++    vendor_id                           = vid;
++    product_id                          = pid;
++    usb_context                         = context;
++    usb_dev                             = usb_handle;
++    usb_interface                       = interface_number;
++
++    libusb_device_descriptor descriptor;
++
++    if(libusb_get_device_descriptor(libusb_get_device(usb_dev), &descriptor) == 0)
++    {
++        usb_name                        = GetUSBString(usb_dev, descriptor.iProduct);
++        usb_serial                      = GetUSBString(usb_dev, descriptor.iSerialNumber);
++        usb_vendor                      = GetUSBString(usb_dev, descriptor.iManufacturer);
++    }
++
++    Initialize();
++}
++#endif
++
++void HIDLampArrayController::Initialize()
++{
++    memset(&ids, 0, sizeof(ids));
++    memset(&LampArray, 0, sizeof(LampArray));
+ 
+     /*-----------------------------------------------------*\
+     | Parse report IDs from descriptor                      |
+@@ -31,7 +103,7 @@ HIDLampArrayController::HIDLampArrayController(hid_device *dev_handle, const cha
+     unsigned int  pos                   = 0;
+     unsigned char report_descriptor[HID_API_MAX_REPORT_DESCRIPTOR_SIZE];
+     unsigned char report_id             = 0;
+-    int           size                  = hid_get_report_descriptor(dev, report_descriptor, sizeof(report_descriptor));
++    int           size                  = GetReportDescriptor(report_descriptor, sizeof(report_descriptor));
+     unsigned int  usage                 = 0;
+     unsigned char usage_page            = 0;
+ 
+@@ -171,20 +243,117 @@ HIDLampArrayController::HIDLampArrayController(hid_device *dev_handle, const cha
+     {
+         GetLampAttributesResponseReport();
+     }
++
++    ApplyQuirks();
++}
++
++void HIDLampArrayController::ApplyQuirks()
++{
++    if(vendor_id == EIGHTBITDO_VID && product_id == EIGHTBITDO_RETRO87_WIRED_PID
++    && Lamps.size() == EIGHTBITDO_RETRO87_LAMP_COUNT)
++    {
++        for(LampAttributes& lamp : Lamps)
++        {
++            while(lamp.PositionXInMicrometers > LampArray.BoundingBoxWidthInMicrometers)
++            {
++                lamp.PositionXInMicrometers /= 10;
++            }
++        }
++
++        Lamps[90].PositionXInMicrometers    = 360000;       /* Right arrow, after down  */
++        Lamps[90].PositionYInMicrometers    = 144000;
++        Lamps[29].LampKey                   = 0x2A;         /* Backspace                */
++        Lamps[15].LampKey                   = 0x48;         /* Pause                    */
++
++        const unsigned int space_lamps[]    = { 79, 80, 82, 83 };
++
++        for(unsigned int lamp_idx : space_lamps)
++        {
++            Lamps[lamp_idx].LampKey         = 0x2C;         /* Space                    */
++        }
++
++        lamp_names.resize(Lamps.size());
++        lamp_names[85]                      = "Key: A (Super button)";
++        lamp_names[86]                      = "Key: B (Super button)";
++    }
+ }
+ 
+ HIDLampArrayController::~HIDLampArrayController()
+ {
+-    hid_close(dev);
++    if(dev)
++    {
++        hid_close(dev);
++    }
++
++#ifdef __linux__
++    if(usb_dev)
++    {
++        libusb_release_interface(usb_dev, usb_interface);
++        libusb_close(usb_dev);
++    }
++#endif
++}
++
++int HIDLampArrayController::GetReportDescriptor(unsigned char *data, size_t length)
++{
++#ifdef __linux__
++    if(usb_dev)
++    {
++        return(libusb_control_transfer(usb_dev, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD | LIBUSB_RECIPIENT_INTERFACE,
++                                       LIBUSB_REQUEST_GET_DESCRIPTOR, HID_DESCRIPTOR_TYPE_REPORT << 8, usb_interface,
++                                       data, (uint16_t)length, HID_LAMPARRAY_USB_TIMEOUT));
++    }
++#endif
++
++    return(hid_get_report_descriptor(dev, data, length));
++}
++
++int HIDLampArrayController::GetFeatureReport(unsigned char *data, size_t length)
++{
++#ifdef __linux__
++    if(usb_dev)
++    {
++        /*-------------------------------------------------*\
++        | As with hidapi, data[0] holds the report ID and   |
++        | the returned report starts with it                |
++        \*-------------------------------------------------*/
++        return(libusb_control_transfer(usb_dev, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE,
++                                       HID_REQUEST_GET_REPORT, (HID_REPORT_TYPE_FEATURE << 8) | data[0], usb_interface,
++                                       data, (uint16_t)length, HID_LAMPARRAY_USB_TIMEOUT));
++    }
++#endif
++
++    return(hid_get_feature_report(dev, data, length));
++}
++
++int HIDLampArrayController::SendFeatureReport(const unsigned char *data, size_t length)
++{
++#ifdef __linux__
++    if(usb_dev)
++    {
++        return(libusb_control_transfer(usb_dev, LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_CLASS | LIBUSB_RECIPIENT_INTERFACE,
++                                       HID_REQUEST_SET_REPORT, (HID_REPORT_TYPE_FEATURE << 8) | data[0], usb_interface,
++                                       (unsigned char *)data, (uint16_t)length, HID_LAMPARRAY_USB_TIMEOUT));
++    }
++#endif
++
++    return(hid_send_feature_report(dev, data, length));
+ }
+ 
+ std::string HIDLampArrayController::GetDeviceLocation()
+ {
+-    return("HID: " + location);
++    return(location);
+ }
+ 
+ std::string HIDLampArrayController::GetDeviceName()
+ {
++#ifdef __linux__
++    if(usb_dev)
++    {
++        return(usb_name);
++    }
++#endif
++
+     wchar_t name_string[128];
+     int ret = hid_get_product_string(dev, name_string, 128);
+ 
+@@ -198,6 +367,13 @@ std::string HIDLampArrayController::GetDeviceName()
+ 
+ std::string HIDLampArrayController::GetDeviceSerial()
+ {
++#ifdef __linux__
++    if(usb_dev)
++    {
++        return(usb_serial);
++    }
++#endif
++
+     wchar_t serial_string[128];
+     int ret = hid_get_serial_number_string(dev, serial_string, 128);
+ 
+@@ -211,6 +387,13 @@ std::string HIDLampArrayController::GetDeviceSerial()
+ 
+ std::string HIDLampArrayController::GetDeviceVendor()
+ {
++#ifdef __linux__
++    if(usb_dev)
++    {
++        return(usb_vendor);
++    }
++#endif
++
+     wchar_t vendor_string[128];
+     int ret = hid_get_manufacturer_string(dev, vendor_string, 128);
+ 
+@@ -237,6 +420,16 @@ std::vector<LampAttributes> HIDLampArrayController::GetLamps()
+     return(Lamps);
+ }
+ 
++std::string HIDLampArrayController::GetLampName(unsigned int LampId)
++{
++    if(LampId < lamp_names.size())
++    {
++        return(lamp_names[LampId]);
++    }
++
++    return("");
++}
++
+ void HIDLampArrayController::GetLampArrayAttributesReport()
+ {
+     unsigned char   usb_buf[sizeof(LampArrayAttributes) + 1];
+@@ -251,7 +444,7 @@ void HIDLampArrayController::GetLampArrayAttributesReport()
+     /*-----------------------------------------------------*\
+     | Get the report                                        |
+     \*-----------------------------------------------------*/
+-    hid_get_feature_report(dev, usb_buf, sizeof(usb_buf));
++    GetFeatureReport(usb_buf, sizeof(usb_buf));
+ 
+     memcpy(&LampArray, &usb_buf[1], sizeof(LampArray));
+ }
+@@ -271,7 +464,7 @@ void HIDLampArrayController::GetLampAttributesResponseReport()
+     /*-----------------------------------------------------*\
+     | Get the report                                        |
+     \*-----------------------------------------------------*/
+-    hid_get_feature_report(dev, usb_buf, sizeof(usb_buf));
++    GetFeatureReport(usb_buf, sizeof(usb_buf));
+ 
+     memcpy(&attributes, &usb_buf[1], sizeof(attributes));
+ 
+@@ -300,7 +493,7 @@ void HIDLampArrayController::SetLampArrayControlReport(unsigned char AutonomousM
+     /*-----------------------------------------------------*\
+     | Send the report                                       |
+     \*-----------------------------------------------------*/
+-    hid_send_feature_report(dev, usb_buf, sizeof(usb_buf));
++    SendFeatureReport(usb_buf, sizeof(usb_buf));
+ }
+ 
+ void HIDLampArrayController::SetLampAttributesRequestReport(unsigned short LampId)
+@@ -322,7 +515,7 @@ void HIDLampArrayController::SetLampAttributesRequestReport(unsigned short LampI
+     /*-----------------------------------------------------*\
+     | Send the report                                       |
+     \*-----------------------------------------------------*/
+-    hid_send_feature_report(dev, usb_buf, sizeof(usb_buf));
++    SendFeatureReport(usb_buf, sizeof(usb_buf));
+ }
+ 
+ void HIDLampArrayController::SetLampMultiUpdateReport(unsigned char LampCount, unsigned char LampUpdateFlags, unsigned short * LampIds, LampArrayColor * UpdateColors)
+@@ -351,5 +544,5 @@ void HIDLampArrayController::SetLampMultiUpdateReport(unsigned char LampCount, u
+     /*-----------------------------------------------------*\
+     | Send the report                                       |
+     \*-----------------------------------------------------*/
+-    hid_send_feature_report(dev, usb_buf, sizeof(usb_buf));
++    SendFeatureReport(usb_buf, sizeof(usb_buf));
+ }
+diff --git a/Controllers/HIDLampArrayController/HIDLampArrayController.h b/Controllers/HIDLampArrayController/HIDLampArrayController.h
+index 2adda02..e1cffe7 100644
+--- a/Controllers/HIDLampArrayController/HIDLampArrayController.h
++++ b/Controllers/HIDLampArrayController/HIDLampArrayController.h
+@@ -11,7 +11,9 @@
+ 
+ #pragma once
+ 
++#include <memory>
+ #include <string>
++#include <vector>
+ #include <hidapi.h>
+ 
+ #include "RGBController.h"
+@@ -106,10 +108,24 @@ enum
+     HID_LAMPARRAY_KIND_ART              = 0x0A,     /* LampArrayKindArt             */
+ };
+ 
++#ifdef __linux__
++/*---------------------------------------------------------*\
++| LampArray interfaces without an interrupt IN endpoint are |
++| not bound by the Linux usbhid driver, so they have no     |
++| hidraw node for hidapi.  They are reached through libusb  |
++| control transfers instead.                                |
++\*---------------------------------------------------------*/
++struct libusb_context;
++struct libusb_device_handle;
++#endif
++
+ class HIDLampArrayController
+ {
+ public:
+-    HIDLampArrayController(hid_device *dev_handle, const char *path);
++    HIDLampArrayController(hid_device *dev_handle, const char *path, unsigned short vid, unsigned short pid);
++#ifdef __linux__
++    HIDLampArrayController(std::shared_ptr<libusb_context> context, libusb_device_handle *usb_handle, int interface_number, const std::string& path, unsigned short vid, unsigned short pid);
++#endif
+     ~HIDLampArrayController();
+ 
+     std::string GetDeviceLocation();
+@@ -120,6 +136,7 @@ public:
+     unsigned int GetLampArrayKind();
+     unsigned int GetLampCount();
+     std::vector<LampAttributes> GetLamps();
++    std::string GetLampName(unsigned int LampId);
+ 
+     void SetLampArrayControlReport(unsigned char AutonomousMode);
+     void SetLampMultiUpdateReport(unsigned char LampCount, unsigned char LampUpdateFlags, unsigned short * LampIds, LampArrayColor * UpdateColors);
+@@ -128,6 +145,22 @@ private:
+     hid_device *                dev;
+     HIDLampArrayReportIDs       ids;
+     std::string                 location;
++    unsigned short              vendor_id;
++    unsigned short              product_id;
++
++#ifdef __linux__
++    std::shared_ptr<libusb_context> usb_context;
++    libusb_device_handle *      usb_dev;
++    int                         usb_interface;
++    std::string                 usb_name;
++    std::string                 usb_serial;
++    std::string                 usb_vendor;
++#endif
++
++    /*-----------------------------------------------------*\
++    | Names for lamps with no HID usage (device quirks)     |
++    \*-----------------------------------------------------*/
++    std::vector<std::string>    lamp_names;
+ 
+     /*-----------------------------------------------------*\
+     | Vector to store lamp attributes for each lamp         |
+@@ -139,7 +172,23 @@ private:
+     \*-----------------------------------------------------*/
+     LampArrayAttributes         LampArray;
+ 
++    void Initialize();
++    void ApplyQuirks();
++
++    int  GetReportDescriptor(unsigned char *data, size_t length);
++    int  GetFeatureReport(unsigned char *data, size_t length);
++    int  SendFeatureReport(const unsigned char *data, size_t length);
++
+     void GetLampArrayAttributesReport();
+     void GetLampAttributesResponseReport();
+     void SetLampAttributesRequestReport(unsigned short LampId);
+ };
++
++#ifdef __linux__
++/*---------------------------------------------------------*\
++| Open the LampArray interfaces that usbhid leaves unbound  |
++| (no interrupt IN endpoint), through libusb: those of the  |
++| given USB device, or (exclude) of every other device.     |
++\*---------------------------------------------------------*/
++std::vector<HIDLampArrayController*> OpenHIDLampArrayUSBControllers(unsigned short vid, unsigned short pid, bool exclude);
++#endif
+diff --git a/Controllers/HIDLampArrayController/HIDLampArrayControllerDetect.cpp b/Controllers/HIDLampArrayController/HIDLampArrayControllerDetect.cpp
+index 1fab17f..5b1d5cf 100644
+--- a/Controllers/HIDLampArrayController/HIDLampArrayControllerDetect.cpp
++++ b/Controllers/HIDLampArrayController/HIDLampArrayControllerDetect.cpp
+@@ -16,6 +16,11 @@
+ #include <vector>
+ #include <hidapi.h>
+ 
++#ifdef __linux__
++#include <libusb.h>
++#include "LogManager.h"
++#endif
++
+ DetectedControllers DetectHIDLampArrayControllers(hid_device_info* info, const std::string& /*name*/)
+ {
+     DetectedControllers detected_controllers;
+@@ -25,7 +30,7 @@ DetectedControllers DetectHIDLampArrayControllers(hid_device_info* info, const s
+ 
+     if(dev)
+     {
+-        HIDLampArrayController* controller = new HIDLampArrayController(dev, info->path);
++        HIDLampArrayController* controller = new HIDLampArrayController(dev, info->path, info->vendor_id, info->product_id);
+ 
+         /*-------------------------------------------------*\
+         | Only create the RGBController if there are lamps  |
+@@ -48,3 +53,225 @@ DetectedControllers DetectHIDLampArrayControllers(hid_device_info* info, const s
+ }
+ 
+ REGISTER_HID_DETECTOR_PU_ONLY("HID LampArray Device", DetectHIDLampArrayControllers, 0x59, 0x01);
++
++#ifdef __linux__
++/*---------------------------------------------------------*\
++| Linux usbhid only binds HID interfaces that have an       |
++| interrupt IN endpoint.  LampArray interfaces with only an |
++| OUT endpoint (e.g. the wired 8BitDo Retro 87 keyboard)    |
++| get no hidraw node, so hidapi cannot see them.  Find such |
++| unbound interfaces with libusb and check their report     |
++| descriptor for a LampArray application collection.       |
++\*---------------------------------------------------------*/
++static bool IsLampArrayDescriptor(const unsigned char* descriptor, int size)
++{
++    unsigned int usage_page = 0;
++    unsigned int usage      = 0;
++    int          pos        = 0;
++
++    while(pos < size)
++    {
++        unsigned char key       = descriptor[pos];
++        int           data_len  = (key & 0x03) == 3 ? 4 : (key & 0x03);
++        unsigned int  value     = 0;
++
++        if(key == 0xFE || pos + 1 + data_len > size)
++        {
++            break;
++        }
++
++        for(int byte_idx = 0; byte_idx < data_len; byte_idx++)
++        {
++            value |= descriptor[pos + 1 + byte_idx] << (8 * byte_idx);
++        }
++
++        switch(key & 0xFC)
++        {
++            case 0x04:
++                usage_page = value;
++                break;
++
++            case 0x08:
++                usage = (data_len == 4) ? (value & 0xFFFF) : value;
++                if(data_len == 4)
++                {
++                    usage_page = value >> 16;
++                }
++                break;
++
++            case 0xA0:
++                if(value == 0x01 && usage_page == 0x59 && usage == 0x01)
++                {
++                    return(true);
++                }
++                break;
++        }
++
++        pos += 1 + data_len;
++    }
++
++    return(false);
++}
++
++std::vector<HIDLampArrayController*> OpenHIDLampArrayUSBControllers(unsigned short vid, unsigned short pid, bool exclude)
++{
++    std::vector<HIDLampArrayController*> controllers;
++    libusb_context*                      raw_context = NULL;
++
++    if(libusb_init(&raw_context) < 0)
++    {
++        return(controllers);
++    }
++
++    /*-----------------------------------------------------*\
++    | Controllers keep the context alive while they use it  |
++    \*-----------------------------------------------------*/
++    std::shared_ptr<libusb_context> context(raw_context, libusb_exit);
++
++    libusb_device** devices;
++    ssize_t         device_count = libusb_get_device_list(raw_context, &devices);
++
++    for(ssize_t device_idx = 0; device_idx < device_count; device_idx++)
++    {
++        libusb_device*              device = devices[device_idx];
++        libusb_device_descriptor    device_descriptor;
++        libusb_config_descriptor*   config;
++
++        if(libusb_get_device_descriptor(device, &device_descriptor) != 0)
++        {
++            continue;
++        }
++
++        bool match = (device_descriptor.idVendor == vid && device_descriptor.idProduct == pid);
++
++        if(match == exclude || libusb_get_active_config_descriptor(device, &config) != 0)
++        {
++            continue;
++        }
++
++        for(uint8_t interface_idx = 0; interface_idx < config->bNumInterfaces; interface_idx++)
++        {
++            if(config->interface[interface_idx].num_altsetting < 1)
++            {
++                continue;
++            }
++
++            const libusb_interface_descriptor* interface = &config->interface[interface_idx].altsetting[0];
++            bool                               has_in    = false;
++
++            for(uint8_t endpoint_idx = 0; endpoint_idx < interface->bNumEndpoints; endpoint_idx++)
++            {
++                if(interface->endpoint[endpoint_idx].bEndpointAddress & LIBUSB_ENDPOINT_IN)
++                {
++                    has_in = true;
++                }
++            }
++
++            /*---------------------------------------------*\
++            | Interfaces with an IN endpoint are handled by |
++            | usbhid and the hidapi detector                |
++            \*---------------------------------------------*/
++            if(interface->bInterfaceClass != LIBUSB_CLASS_HID || has_in)
++            {
++                continue;
++            }
++
++            libusb_device_handle* handle = NULL;
++
++            if(libusb_open(device, &handle) != 0)
++            {
++                continue;
++            }
++
++            unsigned char report_descriptor[HID_API_MAX_REPORT_DESCRIPTOR_SIZE];
++            int           size = -1;
++
++            int claim = LIBUSB_ERROR_BUSY;
++
++            if(libusb_kernel_driver_active(handle, interface->bInterfaceNumber) == 0)
++            {
++                claim = libusb_claim_interface(handle, interface->bInterfaceNumber);
++
++                if(claim == LIBUSB_ERROR_BUSY)
++                {
++                    LOG_WARNING("[HID LampArray] USB device %04X:%04X interface %d is in use by another program; not added",
++                                device_descriptor.idVendor, device_descriptor.idProduct, interface->bInterfaceNumber);
++                }
++            }
++
++            if(claim == 0)
++            {
++                size = libusb_control_transfer(handle, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD | LIBUSB_RECIPIENT_INTERFACE,
++                                               LIBUSB_REQUEST_GET_DESCRIPTOR, 0x22 << 8, interface->bInterfaceNumber,
++                                               report_descriptor, sizeof(report_descriptor), 1000);
++
++                if(size <= 0 || !IsLampArrayDescriptor(report_descriptor, size))
++                {
++                    libusb_release_interface(handle, interface->bInterfaceNumber);
++                    size = -1;
++                }
++            }
++
++            if(size <= 0)
++            {
++                libusb_close(handle);
++                continue;
++            }
++
++            uint8_t     ports[8];
++            int         port_count = libusb_get_port_numbers(device, ports, sizeof(ports));
++            std::string path       = std::to_string(libusb_get_bus_number(device)) + "-";
++
++            for(int port_idx = 0; port_idx < port_count; port_idx++)
++            {
++                path += (port_idx ? "." : "") + std::to_string(ports[port_idx]);
++            }
++
++            path += ":" + std::to_string(config->bConfigurationValue) + "." + std::to_string(interface->bInterfaceNumber);
++
++            /*---------------------------------------------*\
++            | The controller owns the handle and releases   |
++            | the interface when it is deleted              |
++            \*---------------------------------------------*/
++            HIDLampArrayController* controller = new HIDLampArrayController(context, handle, interface->bInterfaceNumber, path,
++                                                                            device_descriptor.idVendor, device_descriptor.idProduct);
++
++            if(controller->GetLampCount() > 0)
++            {
++                controllers.push_back(controller);
++            }
++            else
++            {
++                delete controller;
++            }
++        }
++
++        libusb_free_config_descriptor(config);
++    }
++
++    if(device_count >= 0)
++    {
++        libusb_free_device_list(devices, 1);
++    }
++
++    return(controllers);
++}
++
++DetectedControllers DetectHIDLampArrayUSBControllers()
++{
++    DetectedControllers detected_controllers;
++
++    /*-----------------------------------------------------*\
++    | The wired 8BitDo Retro 87's LampArray is part of its  |
++    | 8BitDo Retro 87 device (Direct mode)                  |
++    \*-----------------------------------------------------*/
++    for(HIDLampArrayController* controller : OpenHIDLampArrayUSBControllers(0x2DC8, 0x2028, true))
++    {
++        detected_controllers.push_back(new RGBController_HIDLampArray(controller));
++    }
++
++    return(detected_controllers);
++}
++
++REGISTER_DETECTOR("HID LampArray Device (USB)", DetectHIDLampArrayUSBControllers);
++#endif
+diff --git a/Controllers/HIDLampArrayController/RGBController_HIDLampArray.cpp b/Controllers/HIDLampArrayController/RGBController_HIDLampArray.cpp
+index 63a7a53..80e5c27 100644
+--- a/Controllers/HIDLampArrayController/RGBController_HIDLampArray.cpp
++++ b/Controllers/HIDLampArrayController/RGBController_HIDLampArray.cpp
+@@ -368,9 +368,14 @@ void RGBController_HIDLampArray::SetupZones()
+     {
+         led new_led;
+ 
+-        unsigned char lamp_key = controller->GetLamps()[lamp_idx].LampKey;
++        unsigned char lamp_key  = controller->GetLamps()[lamp_idx].LampKey;
++        std::string   lamp_name = controller->GetLampName((unsigned int)lamp_idx);
+ 
+-        if(lamp_key < HID_KEYBOARD_USAGE_IDS_COUNT && HIDUsageIDsToKeyNames[lamp_key] != nullptr)
++        if(!lamp_name.empty())
++        {
++            new_led.name = lamp_name;
++        }
++        else if(lamp_key < HID_KEYBOARD_USAGE_IDS_COUNT && HIDUsageIDsToKeyNames[lamp_key] != nullptr)
+         {
+             new_led.name = HIDUsageIDsToKeyNames[lamp_key];
+         }
+diff --git a/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.cpp b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.cpp
+new file mode 100644
+index 0000000..8be180e
+--- /dev/null
++++ b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.cpp
+@@ -0,0 +1,510 @@
++/*---------------------------------------------------------*\
++| EightBitDoRetro87Controller.cpp                           |
++|                                                           |
++|   Driver for 8BitDo Retro 87 keyboard (2.4 GHz dongle)    |
++|                                                           |
++|   JoseStud                                    27 Sep 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#include <chrono>
++#include <cstring>
++#include <thread>
++#include "EightBitDoRetro87Controller.h"
++#include "LogManager.h"
++#include "StringUtils.h"
++
++using namespace std::chrono_literals;
++
++EightBitDoRetro87Controller::EightBitDoRetro87Controller(hid_device* dev_handle, const char* path, std::string dev_name)
++{
++    dev         = dev_handle;
++    location    = path;
++    name        = dev_name;
++
++    /*-----------------------------------------------------*\
++    | Read the stored settings so that unchanged bytes are  |
++    | not rewritten and the current effect can be shown     |
++    \*-----------------------------------------------------*/
++    custom_known = false;
++    profile_read = Read(RETRO87_CMD_READ_PROFILE, profile, RETRO87_PROFILE_SIZE);
++
++    if(!profile_read)
++    {
++        memset(profile, 0xFF, sizeof(profile));
++        LOG_WARNING("[%s] Could not read the keyboard profile", name.c_str());
++    }
++    else if(!IsProfileValid())
++    {
++        LOG_WARNING("[%s] No profile stored on the keyboard; lighting settings other than the effect are ignored until one is created with the vendor software", name.c_str());
++    }
++}
++
++EightBitDoRetro87Controller::~EightBitDoRetro87Controller()
++{
++    hid_close(dev);
++}
++
++void EightBitDoRetro87Controller::SetConnection(std::string connection_name)
++{
++    connection = connection_name;
++}
++
++std::string EightBitDoRetro87Controller::GetConnection()
++{
++    return(connection);
++}
++
++bool EightBitDoRetro87Controller::IsProfileRead()
++{
++    return(profile_read);
++}
++
++std::string EightBitDoRetro87Controller::GetDeviceLocation()
++{
++    return("HID: " + location);
++}
++
++std::string EightBitDoRetro87Controller::GetDeviceName()
++{
++    return(name);
++}
++
++std::string EightBitDoRetro87Controller::GetSerialString()
++{
++    wchar_t serial_string[128];
++    int ret = hid_get_serial_number_string(dev, serial_string, 128);
++
++    if(ret != 0)
++    {
++        return("");
++    }
++
++    return(StringUtils::wstring_to_string(serial_string));
++}
++
++bool EightBitDoRetro87Controller::IsProfileValid()
++{
++    unsigned int marker = profile[0] | (profile[1] << 8) | (profile[2] << 16) | ((unsigned int)profile[3] << 24);
++
++    return(marker == RETRO87_PROFILE_MARKER);
++}
++
++bool EightBitDoRetro87Controller::IsProfileActive()
++{
++    /*-----------------------------------------------------*\
++    | Toggled by the Profile button on the keyboard. While  |
++    | inactive, the keyboard ignores stored brightness,     |
++    | speed and colors and uses its onboard (Fn) settings.  |
++    \*-----------------------------------------------------*/
++    return(profile[RETRO87_PROFILE_ACTIVE] == 1);
++}
++
++unsigned char EightBitDoRetro87Controller::GetCurrentMode()
++{
++    if(profile[RETRO87_PROFILE_CUSTOM_ENABLE] == 1)
++    {
++        return(RETRO87_MODE_CUSTOM);
++    }
++
++    return(profile[RETRO87_PROFILE_CURRENT_MODE]);
++}
++
++unsigned char* EightBitDoRetro87Controller::GetProfile()
++{
++    return(profile);
++}
++
++bool EightBitDoRetro87Controller::ReadCustom(unsigned char* block)
++{
++    std::lock_guard<std::mutex> lock(transfer_mutex);
++
++    if(!Read(RETRO87_CMD_READ_CUSTOM, block, RETRO87_CUSTOM_SIZE))
++    {
++        return(false);
++    }
++
++    memcpy(custom, block, RETRO87_CUSTOM_SIZE);
++    custom_known = true;
++    return(true);
++}
++
++void EightBitDoRetro87Controller::SetMode(unsigned char mode_value, unsigned char brightness, unsigned char speed, RGBColor color, RGBColor echo_color)
++{
++    /*-----------------------------------------------------*\
++    | Each effect has its own record; the whole record is   |
++    | written, keeping fields OpenRGB does not expose       |
++    | (color ripple direction, starlight density)           |
++    \*-----------------------------------------------------*/
++    /*-----------------------------------------------------*\
++    | Responses are matched to requests by reading the      |
++    | device, so only one transaction may run at a time     |
++    \*-----------------------------------------------------*/
++    std::lock_guard<std::mutex> lock(transfer_mutex);
++
++    unsigned int    offset      = 0;
++    unsigned char   size        = 0;
++    int             color_idx   = -1;
++    int             echo_idx    = -1;
++    bool            has_speed   = true;
++
++    switch(mode_value)
++    {
++        case RETRO87_MODE_SOLID:
++            offset      = RETRO87_PROFILE_SOLID;
++            size        = 5;
++            color_idx   = 2;
++            has_speed   = false;
++            break;
++
++        case RETRO87_MODE_CYCLE:
++            offset      = RETRO87_PROFILE_CYCLE;
++            size        = 2;
++            break;
++
++        case RETRO87_MODE_COLOR_RIPPLE:
++            offset      = RETRO87_PROFILE_COLOR_RIPPLE;
++            size        = 3;
++            break;
++
++        case RETRO87_MODE_BREATHING:
++            offset      = RETRO87_PROFILE_BREATHING;
++            size        = 6;
++            color_idx   = 3;
++            break;
++
++        case RETRO87_MODE_RIPPLE:
++            offset      = RETRO87_PROFILE_RIPPLE;
++            size        = 6;
++            color_idx   = 3;
++            break;
++
++        case RETRO87_MODE_RESONANCE:
++            offset      = RETRO87_PROFILE_RESONANCE;
++            size        = 9;
++            color_idx   = 3;
++            echo_idx    = 6;
++            break;
++
++        case RETRO87_MODE_STARLIGHT:
++            offset      = RETRO87_PROFILE_STARLIGHT;
++            size        = 10;
++            color_idx   = 4;
++            echo_idx    = 7;
++            break;
++    }
++
++    if(size > 0)
++    {
++        unsigned char record[10];
++
++        memcpy(record, &profile[offset], size);
++
++        record[0] = brightness;
++
++        if(has_speed)
++        {
++            record[1] = speed;
++        }
++
++        if(mode_value == RETRO87_MODE_COLOR_RIPPLE && record[2] > 5)
++        {
++            record[2] = 0;
++        }
++
++        if(mode_value == RETRO87_MODE_STARLIGHT && (record[2] < 5 || record[2] > 100))
++        {
++            record[2] = 25;
++        }
++
++        if(color_idx >= 0)
++        {
++            record[color_idx - 1]   = 1;    /* Use stored color */
++            record[color_idx]       = RGBGetRValue(color);
++            record[color_idx + 1]   = RGBGetGValue(color);
++            record[color_idx + 2]   = RGBGetBValue(color);
++        }
++
++        if(echo_idx >= 0)
++        {
++            record[echo_idx]        = RGBGetRValue(echo_color);
++            record[echo_idx + 1]    = RGBGetGValue(echo_color);
++            record[echo_idx + 2]    = RGBGetBValue(echo_color);
++        }
++
++        WriteProfile(offset, record, size);
++    }
++
++    /*-----------------------------------------------------*\
++    | Vendor sequence: leave per-key mode, then select the  |
++    | effect                                                |
++    \*-----------------------------------------------------*/
++    unsigned char value = 0;
++    WriteProfile(RETRO87_PROFILE_CUSTOM_ENABLE, &value, 1);
++
++    WriteProfile(RETRO87_PROFILE_CURRENT_MODE, &mode_value, 1);
++}
++
++void EightBitDoRetro87Controller::SetCustom(unsigned char brightness, RGBColor* led_colors)
++{
++    std::lock_guard<std::mutex> lock(transfer_mutex);
++
++    unsigned char block[RETRO87_CUSTOM_SIZE];
++
++    memset(block, 0, sizeof(block));
++
++    block[0] = brightness;
++    block[1] = 1;
++    block[2] = RETRO87_CUSTOM_TYPE_STATIC;
++    block[3] = RETRO87_SPEED_DEFAULT;
++    block[4] = 25;
++
++    for(unsigned int led_idx = 0; led_idx < RETRO87_CUSTOM_LED_COUNT; led_idx++)
++    {
++        block[9 + led_idx * 3]      = RGBGetRValue(led_colors[led_idx]);
++        block[9 + led_idx * 3 + 1]  = RGBGetGValue(led_colors[led_idx]);
++        block[9 + led_idx * 3 + 2]  = RGBGetBValue(led_colors[led_idx]);
++    }
++
++    block[RETRO87_CUSTOM_SIZE - 1] = 1;
++
++    /*-----------------------------------------------------*\
++    | Writing the per-key block erases flash; skip it when  |
++    | the keyboard already stores exactly this block        |
++    \*-----------------------------------------------------*/
++    bool stored = custom_known && memcmp(custom, block, RETRO87_CUSTOM_SIZE) == 0;
++
++    if(stored)
++    {
++        LOG_DEBUG("[%s] Per-key block unchanged; not rewritten", name.c_str());
++    }
++    else
++    {
++        LOG_DEBUG("[%s] Writing per-key block", name.c_str());
++        custom_known = WriteCustom(block);
++
++        if(custom_known)
++        {
++            memcpy(custom, block, RETRO87_CUSTOM_SIZE);
++        }
++    }
++
++    if(stored || custom_known)
++    {
++        unsigned char value = 1;
++        WriteProfile(RETRO87_PROFILE_CUSTOM_ENABLE, &value, 1);
++    }
++}
++
++bool EightBitDoRetro87Controller::Transfer(unsigned char command, unsigned int offset, const unsigned char* data, unsigned char length, unsigned char* response)
++{
++    unsigned char   usb_buf[RETRO87_PACKET_SIZE];
++    unsigned char   sum             = 0;
++    bool            is_read         = (command == RETRO87_CMD_READ_PROFILE || command == RETRO87_CMD_READ_CUSTOM);
++    bool            check_offset    = (command != RETRO87_CMD_PREPARE_CUSTOM && command != RETRO87_CMD_WRITE_CUSTOM);
++
++    memset(usb_buf, 0, sizeof(usb_buf));
++
++    usb_buf[0]  = RETRO87_REPORT_ID_OUT;
++    usb_buf[1]  = 0x04;
++    usb_buf[2]  = command;
++    usb_buf[4]  = length;
++    usb_buf[6]  = offset & 0xFF;
++    usb_buf[7]  = (offset >> 8) & 0xFF;
++    usb_buf[8]  = (offset >> 16) & 0xFF;
++    usb_buf[9]  = (offset >> 24) & 0xFF;
++
++    if(!is_read && data != NULL)
++    {
++        for(unsigned int i = 0; i < length; i++)
++        {
++            usb_buf[10 + i] = data[i];
++            sum            += data[i];
++        }
++    }
++
++    usb_buf[5]  = sum;
++
++    if(hid_write(dev, usb_buf, RETRO87_PACKET_SIZE) != RETRO87_PACKET_SIZE)
++    {
++        return(false);
++    }
++
++    /*-----------------------------------------------------*\
++    | Skip unrelated input reports until the response to    |
++    | this command arrives                                  |
++    \*-----------------------------------------------------*/
++    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(RETRO87_TIMEOUT_MS);
++
++    while(std::chrono::steady_clock::now() < deadline)
++    {
++        int remaining = (int)std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
++        int ret       = hid_read_timeout(dev, response, RETRO87_PACKET_SIZE, remaining > 0 ? remaining : 1);
++
++        if(ret < 0)
++        {
++            return(false);
++        }
++
++        if(ret < 10 || response[0] != RETRO87_REPORT_ID_IN || response[1] != 0x04 || response[2] != 0x03 || response[3] != command)
++        {
++            continue;
++        }
++
++        unsigned int returned_offset = response[6] | (response[7] << 8) | (response[8] << 16) | ((unsigned int)response[9] << 24);
++
++        if(check_offset && returned_offset != offset)
++        {
++            continue;
++        }
++
++        return(true);
++    }
++
++    LOG_WARNING("[%s] No response to command 0x%02X at offset 0x%03X", name.c_str(), command, offset);
++
++    return(false);
++}
++
++bool EightBitDoRetro87Controller::Read(unsigned char command, unsigned char* buf, unsigned int size)
++{
++    unsigned char response[RETRO87_PACKET_SIZE];
++    unsigned int  offset = 0;
++
++    while(offset < size)
++    {
++        unsigned char chunk = (size - offset) > RETRO87_MAX_DATA ? RETRO87_MAX_DATA : (unsigned char)(size - offset);
++
++        if(!Transfer(command, offset, NULL, chunk, response))
++        {
++            return(false);
++        }
++
++        unsigned char returned = response[4];
++
++        if(returned == 0 || returned > chunk)
++        {
++            return(false);
++        }
++
++        memcpy(&buf[offset], &response[10], returned);
++        offset += returned;
++    }
++
++    return(true);
++}
++
++bool EightBitDoRetro87Controller::StartConfiguration()
++{
++    unsigned char usb_buf[RETRO87_PACKET_SIZE];
++
++    memset(usb_buf, 0, sizeof(usb_buf));
++
++    usb_buf[0]  = RETRO87_REPORT_ID_OUT;
++    usb_buf[1]  = 0x04;
++    usb_buf[2]  = RETRO87_CMD_CONFIG_MODE;
++
++    bool ok = hid_write(dev, usb_buf, RETRO87_PACKET_SIZE) == RETRO87_PACKET_SIZE;
++
++    std::this_thread::sleep_for(10ms);
++
++    return(ok);
++}
++
++bool EightBitDoRetro87Controller::WriteProfile(unsigned int offset, const unsigned char* data, unsigned char length)
++{
++    unsigned char response[RETRO87_PACKET_SIZE];
++    unsigned char readback[RETRO87_MAX_DATA];
++
++    if(length == 0 || length > RETRO87_MAX_DATA || offset + length > RETRO87_PROFILE_SIZE)
++    {
++        return(false);
++    }
++
++    /*-----------------------------------------------------*\
++    | Skip writes that would not change the stored value    |
++    \*-----------------------------------------------------*/
++    if(profile_read && memcmp(&profile[offset], data, length) == 0)
++    {
++        return(true);
++    }
++
++    if(!StartConfiguration())
++    {
++        return(false);
++    }
++
++    if(!Transfer(RETRO87_CMD_WRITE_PROFILE, offset, data, length, response) || response[4] != length)
++    {
++        LOG_WARNING("[%s] Write at 0x%03X was not acknowledged", name.c_str(), offset);
++        return(false);
++    }
++
++    /*-----------------------------------------------------*\
++    | Verify by reading back                                |
++    \*-----------------------------------------------------*/
++    if(!Transfer(RETRO87_CMD_READ_PROFILE, offset, NULL, length, response) || response[4] != length)
++    {
++        return(false);
++    }
++
++    memcpy(readback, &response[10], length);
++
++    if(memcmp(readback, data, length) != 0)
++    {
++        LOG_WARNING("[%s] Readback mismatch at 0x%03X", name.c_str(), offset);
++        return(false);
++    }
++
++    memcpy(&profile[offset], data, length);
++
++    return(true);
++}
++
++bool EightBitDoRetro87Controller::WriteCustom(const unsigned char* block)
++{
++    unsigned char response[RETRO87_PACKET_SIZE];
++    unsigned int  offset = 0;
++
++    if(!StartConfiguration())
++    {
++        return(false);
++    }
++
++    /*-----------------------------------------------------*\
++    | The keyboard needs a prepare command. The vendor      |
++    | waits 100 ms between chunks; each chunk is            |
++    | acknowledged in about 7 ms, so 20 ms leaves a margin  |
++    | and a full update takes about 0.2 s                   |
++    \*-----------------------------------------------------*/
++    if(!Transfer(RETRO87_CMD_PREPARE_CUSTOM, 0, NULL, 0, response))
++    {
++        return(false);
++    }
++
++    while(offset < RETRO87_CUSTOM_SIZE)
++    {
++        unsigned char chunk = (RETRO87_CUSTOM_SIZE - offset) > RETRO87_MAX_DATA ? RETRO87_MAX_DATA : (unsigned char)(RETRO87_CUSTOM_SIZE - offset);
++
++        std::this_thread::sleep_for(20ms);
++
++        if(!Transfer(RETRO87_CMD_WRITE_CUSTOM, offset, &block[offset], chunk, response))
++        {
++            return(false);
++        }
++
++        unsigned char accepted = response[4];
++
++        if(accepted == 0 || accepted > chunk)
++        {
++            LOG_WARNING("[%s] Per-key write at 0x%03X accepted %d bytes", name.c_str(), offset, accepted);
++            return(false);
++        }
++
++        offset += accepted;
++    }
++
++    return(true);
++}
+diff --git a/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.h b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.h
+new file mode 100644
+index 0000000..4d38dc7
+--- /dev/null
++++ b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.h
+@@ -0,0 +1,131 @@
++/*---------------------------------------------------------*\
++| EightBitDoRetro87Controller.h                             |
++|                                                           |
++|   Driver for 8BitDo Retro 87 keyboard (2.4 GHz dongle)    |
++|                                                           |
++|   JoseStud                                    27 Sep 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#include <mutex>
++#include <string>
++#include <hidapi.h>
++#include "RGBController.h"
++
++/*---------------------------------------------------------*\
++| Report layout                                             |
++|   Request:  81 04 CMD 00 LEN SUM OFFSET(LE32) DATA...     |
++|   Response: 02 04 03 CMD LEN xx OFFSET(LE32) DATA...      |
++\*---------------------------------------------------------*/
++#define RETRO87_PACKET_SIZE             64
++#define RETRO87_REPORT_ID_OUT           0x81
++#define RETRO87_REPORT_ID_IN            0x02
++#define RETRO87_MAX_DATA                53
++#define RETRO87_TIMEOUT_MS              2000
++
++/*---------------------------------------------------------*\
++| Commands                                                  |
++\*---------------------------------------------------------*/
++enum
++{
++    RETRO87_CMD_WRITE_PROFILE           = 0x01,
++    RETRO87_CMD_READ_PROFILE            = 0x02,
++    RETRO87_CMD_CONFIG_MODE             = 0x08, /* Sent before writing  */
++    RETRO87_CMD_PREPARE_CUSTOM          = 0x0D, /* Before custom writes */
++    RETRO87_CMD_WRITE_CUSTOM            = 0x0E,
++    RETRO87_CMD_READ_CUSTOM             = 0x0F,
++};
++
++/*---------------------------------------------------------*\
++| Profile region (1532 bytes)                               |
++\*---------------------------------------------------------*/
++#define RETRO87_PROFILE_SIZE            0x5FC
++#define RETRO87_PROFILE_MARKER          0x20200902
++#define RETRO87_PROFILE_ACTIVE          0x024   /* 1 = active       */
++#define RETRO87_PROFILE_CURRENT_MODE    0x5CA
++#define RETRO87_PROFILE_SOLID           0x5D0   /* 5 bytes          */
++#define RETRO87_PROFILE_CYCLE           0x5D5   /* 2 bytes          */
++#define RETRO87_PROFILE_COLOR_RIPPLE    0x5D7   /* 3 bytes          */
++#define RETRO87_PROFILE_BREATHING       0x5DA   /* 6 bytes          */
++#define RETRO87_PROFILE_RIPPLE          0x5E0   /* 6 bytes          */
++#define RETRO87_PROFILE_RESONANCE       0x5E6   /* 9 bytes          */
++#define RETRO87_PROFILE_STARLIGHT       0x5EF   /* 10 bytes         */
++#define RETRO87_PROFILE_CUSTOM_ENABLE   0x5F9
++
++/*---------------------------------------------------------*\
++| Custom (per-key) region (283 bytes)                       |
++|   brightness, 1, type, speed, count, 4 x 0,               |
++|   91 x R G B, 1                                           |
++\*---------------------------------------------------------*/
++#define RETRO87_CUSTOM_SIZE             0x11B
++#define RETRO87_CUSTOM_LED_COUNT        91
++#define RETRO87_CUSTOM_TYPE_STATIC      0x01
++
++/*---------------------------------------------------------*\
++| Built-in effects (value of RETRO87_PROFILE_CURRENT_MODE)  |
++\*---------------------------------------------------------*/
++enum
++{
++    RETRO87_MODE_OFF                    = 0x00,
++    RETRO87_MODE_RESONANCE              = 0x01,
++    RETRO87_MODE_STARLIGHT              = 0x02,
++    RETRO87_MODE_SOLID                  = 0x03,
++    RETRO87_MODE_CYCLE                  = 0x04,
++    RETRO87_MODE_COLOR_RIPPLE           = 0x05,
++    RETRO87_MODE_BREATHING              = 0x06,
++    RETRO87_MODE_RIPPLE                 = 0x07,
++    RETRO87_MODE_CUSTOM                 = 0xFF, /* OpenRGB only     */
++};
++
++/*---------------------------------------------------------*\
++| Stored speed: 1 is fastest, 10 is slowest                 |
++\*---------------------------------------------------------*/
++#define RETRO87_SPEED_FASTEST           0x01
++#define RETRO87_SPEED_SLOWEST           0x0A
++#define RETRO87_SPEED_DEFAULT           0x06
++#define RETRO87_BRIGHTNESS_MAX          0xFF
++
++class EightBitDoRetro87Controller
++{
++public:
++    EightBitDoRetro87Controller(hid_device* dev_handle, const char* path, std::string dev_name);
++    ~EightBitDoRetro87Controller();
++
++    std::string     GetDeviceLocation();
++    std::string     GetDeviceName();
++    std::string     GetSerialString();
++
++    void            SetConnection(std::string connection_name);
++    std::string     GetConnection();
++
++    bool            IsProfileRead();
++    bool            IsProfileValid();
++    bool            IsProfileActive();
++    unsigned char   GetCurrentMode();
++    unsigned char*  GetProfile();
++    bool            ReadCustom(unsigned char* block);
++
++    void            SetMode(unsigned char mode_value, unsigned char brightness, unsigned char speed, RGBColor color, RGBColor echo_color);
++    void            SetCustom(unsigned char brightness, RGBColor* led_colors);
++
++private:
++    hid_device*     dev;
++    std::string     location;
++    std::string     name;
++    bool            profile_read;
++    std::string     connection;
++    std::mutex      transfer_mutex;
++    unsigned char   profile[RETRO87_PROFILE_SIZE];
++    unsigned char   custom[RETRO87_CUSTOM_SIZE];    /* Last per-key block read or written */
++    bool            custom_known;
++
++    bool            Transfer(unsigned char command, unsigned int offset, const unsigned char* data, unsigned char length, unsigned char* response);
++    bool            Read(unsigned char command, unsigned char* buf, unsigned int size);
++    bool            WriteProfile(unsigned int offset, const unsigned char* data, unsigned char length);
++    bool            WriteCustom(const unsigned char* block);
++    bool            StartConfiguration();
++};
+diff --git a/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87ControllerDetect.cpp b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87ControllerDetect.cpp
+new file mode 100644
+index 0000000..d9cc3cd
+--- /dev/null
++++ b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87ControllerDetect.cpp
+@@ -0,0 +1,97 @@
++/*---------------------------------------------------------*\
++| EightBitDoRetro87ControllerDetect.cpp                     |
++|                                                           |
++|   Detector for 8BitDo Retro 87 keyboard                   |
++|                                                           |
++|   JoseStud                                    27 Sep 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#include <hidapi.h>
++#include "DetectionManager.h"
++#include "LogManager.h"
++#include "EightBitDoRetro87Controller.h"
++#include "RGBController_EightBitDoRetro87.h"
++
++/*---------------------------------------------------------*\
++| 8BitDo vendor ID                                          |
++\*---------------------------------------------------------*/
++#define EIGHTBITDO_VID                              0x2DC8
++
++/*---------------------------------------------------------*\
++| 8BitDo keyboard product IDs                               |
++\*---------------------------------------------------------*/
++#define EIGHTBITDO_RETRO87_DONGLE_PID               0x202E
++#define EIGHTBITDO_RETRO87_WIRED_PID                0x2028
++
++DetectedControllers DetectEightBitDoRetro87(hid_device_info* info, const std::string& name)
++{
++    DetectedControllers detected_controllers;
++    hid_device*         dev;
++
++    dev = hid_open_path(info->path);
++
++    if(dev)
++    {
++        EightBitDoRetro87Controller* controller = new EightBitDoRetro87Controller(dev, info->path, name);
++
++        controller->SetConnection(info->product_id == EIGHTBITDO_RETRO87_WIRED_PID ? "USB cable" : "2.4 GHz dongle");
++
++        /*-------------------------------------------------*\
++        | The dongle enumerates even when the keyboard is   |
++        | off or connected by USB cable, where it cannot    |
++        | reach it.  Only add the keyboard if it answered.  |
++        \*-------------------------------------------------*/
++        if(controller->IsProfileRead())
++        {
++            HIDLampArrayController* lamps = nullptr;
++
++#ifdef __linux__
++            /*---------------------------------------------*\
++            | Over the cable, the keyboard's LampArray       |
++            | interface provides Direct mode                 |
++            \*---------------------------------------------*/
++            if(info->product_id == EIGHTBITDO_RETRO87_WIRED_PID)
++            {
++                std::vector<HIDLampArrayController*> found = OpenHIDLampArrayUSBControllers(EIGHTBITDO_VID, EIGHTBITDO_RETRO87_WIRED_PID, false);
++
++                for(std::size_t found_idx = 0; found_idx < found.size(); found_idx++)
++                {
++                    if(found_idx == 0)
++                    {
++                        lamps = found[found_idx];
++                    }
++                    else
++                    {
++                        delete found[found_idx];
++                    }
++                }
++            }
++#endif
++
++            detected_controllers.push_back(new RGBController_EightBitDoRetro87(controller, lamps));
++        }
++        else
++        {
++            LOG_INFO("[%s] Keyboard not reachable through the dongle (switched off, or connected by USB cable); not added", name.c_str());
++            delete controller;
++        }
++    }
++
++    return(detected_controllers);
++}
++
++/*---------------------------------------------------------*\
++| Configuration interface: 2, usage page 0xFFA0, usage 1    |
++\*---------------------------------------------------------*/
++REGISTER_HID_DETECTOR_IPU("8BitDo Retro 87 Mecha BREAK", DetectEightBitDoRetro87, EIGHTBITDO_VID, EIGHTBITDO_RETRO87_DONGLE_PID, 2, 0xFFA0, 0x01);
++
++/*---------------------------------------------------------*\
++| The keyboard's own configuration interface over the USB   |
++| cable uses the same protocol.  While the cable is in, the |
++| dongle no longer reaches the keyboard.  Per-key streaming |
++| over the cable is the separate HID LampArray device.      |
++\*---------------------------------------------------------*/
++REGISTER_HID_DETECTOR_IPU("8BitDo Retro 87 Mecha BREAK (USB)", DetectEightBitDoRetro87, EIGHTBITDO_VID, EIGHTBITDO_RETRO87_WIRED_PID, 2, 0xFFA0, 0x01);
+diff --git a/Controllers/8BitDoController/8BitDoRetro87Controller/RGBController_EightBitDoRetro87.cpp b/Controllers/8BitDoController/8BitDoRetro87Controller/RGBController_EightBitDoRetro87.cpp
+new file mode 100644
+index 0000000..b288de0
+--- /dev/null
++++ b/Controllers/8BitDoController/8BitDoRetro87Controller/RGBController_EightBitDoRetro87.cpp
+@@ -0,0 +1,533 @@
++/*---------------------------------------------------------*\
++| RGBController_EightBitDoRetro87.cpp                       |
++|                                                           |
++|   RGBController for 8BitDo Retro 87 keyboard              |
++|                                                           |
++|   JoseStud                                    27 Sep 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#include "KeyboardLayoutManager.h"
++#include "LogManager.h"
++#include "RGBController_EightBitDoRetro87.h"
++
++/**------------------------------------------------------------------*\
++    @name 8BitDo Retro 87
++    @category Keyboard
++    @type USB
++    @save :white_check_mark:
++    @direct :white_check_mark:
++    @effects :white_check_mark:
++    @detectors DetectEightBitDoRetro87
++    @comment Tested with the Mecha BREAK edition over its 2.4 GHz
++        dongle. The keyboard only uses stored brightness, speed and
++        colors while its profile is active (Profile button). Stored
++        per-key updates are slow and saved to flash, so Direct mode
++        is only available over the USB cable, where it uses the
++        keyboard's HID LampArray interface (Linux: via libusb).
++\*-------------------------------------------------------------------*/
++
++#define RETRO87_SPACE_LED               3
++#define RETRO87_SPACE_LED_LAST          7
++#define RETRO87_NO_LED                  0   /* ISO keys, removed by ANSI layout */
++
++#define RETRO87_MODE_DIRECT             0x100   /* OpenRGB only, LampArray */
++
++/*---------------------------------------------------------*\
++| At most one saved write (effect or Custom) per interval;  |
++| every Custom write erases flash on the keyboard           |
++\*---------------------------------------------------------*/
++#define RETRO87_SAVE_INTERVAL           std::chrono::milliseconds(1000)
++
++/*---------------------------------------------------------*\
++| LampArray lamp ID for each configuration LED index        |
++\*---------------------------------------------------------*/
++static const unsigned short retro87_lamp_ids[RETRO87_CUSTOM_LED_COUNT] =
++{
++    76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 63,
++    64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 50, 51, 52, 53,
++    54, 55, 56, 57, 58, 59, 60, 61, 62, 33, 34, 35, 36, 37, 38, 39,
++    40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 16, 17, 18, 19, 20, 21,
++    22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,  0,  1,  2,  3,  4,
++     5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15
++};
++
++static const char* KEY_EN_RETRO87_A = "Key: A (Super button)";
++static const char* KEY_EN_RETRO87_B = "Key: B (Super button)";
++
++/*---------------------------------------------------------------------*\
++|  Retro 87 KLM layout: values are LED indices in the per-key block    |
++\*---------------------------------------------------------------------*/
++static const std::vector<unsigned int> retro87_values =
++{
++    /* ESC          F1    F2    F3    F4    F5    F6    F7    F8    F9   F10   F11   F12   PRSC  SCLK  PSBK */
++        75,         76,   77,   78,   79,   80,   81,   82,   83,   84,   85,   86,   87,   88,   89,   90,
++    /* BKTK    1     2     3     4     5     6     7     8     9     0     -     =   BSPC  INS   HOME  PGUP */
++        58,   59,   60,   61,   62,   63,   64,   65,   66,   67,   68,   69,   70,   71,   72,   73,   74,
++    /* TAB     Q     W     E     R     T     Y     U     I     O     P     [     ]     \   DEL    END  PGDN */
++        41,   42,   43,   44,   45,   46,   47,   48,   49,   50,   51,   52,   53,   54,   55,   56,   57,
++    /* CPLK    A     S     D     F     G     H     J     K     L     ;     '     #   ENTR                   */
++        28,   29,   30,   31,   32,   33,   34,   35,   36,   37,   38,   39,    RETRO87_NO_LED,   40,
++    /* LSFT  ISO\    Z     X     C     V     B     N     M     ,     .     /   RSFT              ARWU       */
++        15,    RETRO87_NO_LED,    16,   17,   18,   19,   20,   21,   22,   23,   24,   25,   26,   27,
++    /* LCTL  LWIN  LALT               SPC              RALT    A     B   RCTL              ARWL ARWD   ARWR */
++         0,    1,    2,                3,                8,    9,   10,   11,               12,   13,   14,
++};
++
++static const keyboard_keymap_overlay_values retro87_layout =
++{
++    KEYBOARD_SIZE::KEYBOARD_SIZE_TKL,
++    {
++        retro87_values,
++        {
++            /* Add more regional layout fixes here */
++        }
++    },
++    {
++        /*-------------------------------------------------------------------------------------------------------------------------------------*\
++        | Edit Keys - the right Fn and Menu positions hold the A and B buttons                                                                  |
++        |   Zone,   Row,    Column,     Value,      Name,                       Alternate Name,             OpCode                              |
++        \*-------------------------------------------------------------------------------------------------------------------------------------*/
++        {   0,      5,      11,         9,          KEY_EN_RETRO87_A,           KEY_EN_UNUSED,              KEYBOARD_OPCODE_SWAP_ONLY,          },
++        {   0,      5,      12,         10,         KEY_EN_RETRO87_B,           KEY_EN_UNUSED,              KEYBOARD_OPCODE_SWAP_ONLY,          },
++    }
++};
++
++static mode CreateMode(const char* name, int value, unsigned int flags, unsigned int colors)
++{
++    mode new_mode;
++
++    new_mode.name               = name;
++    new_mode.value              = value;
++    new_mode.flags              = flags | MODE_FLAG_AUTOMATIC_SAVE;
++    new_mode.color_mode         = MODE_COLORS_NONE;
++
++    if(flags & MODE_FLAG_HAS_BRIGHTNESS)
++    {
++        new_mode.brightness_min = 0;
++        new_mode.brightness_max = RETRO87_BRIGHTNESS_MAX;
++        new_mode.brightness     = RETRO87_BRIGHTNESS_MAX;
++    }
++
++    if(flags & MODE_FLAG_HAS_SPEED)
++    {
++        new_mode.speed_min      = RETRO87_SPEED_SLOWEST;
++        new_mode.speed_max      = RETRO87_SPEED_FASTEST;
++        new_mode.speed          = RETRO87_SPEED_DEFAULT;
++    }
++
++    if(flags & MODE_FLAG_HAS_PER_LED_COLOR)
++    {
++        new_mode.color_mode     = MODE_COLORS_PER_LED;
++    }
++
++    if(colors > 0)
++    {
++        new_mode.colors_min     = colors;
++        new_mode.colors_max     = colors;
++        new_mode.color_mode     = MODE_COLORS_MODE_SPECIFIC;
++        new_mode.colors.resize(colors, ToRGBColor(0xFF, 0xA5, 0x00));
++    }
++
++    return(new_mode);
++}
++
++RGBController_EightBitDoRetro87::RGBController_EightBitDoRetro87(EightBitDoRetro87Controller* controller_ptr, HIDLampArrayController* lamps_ptr)
++{
++    controller          = controller_ptr;
++    lamps               = (lamps_ptr && lamps_ptr->GetLampCount() == RETRO87_CUSTOM_LED_COUNT) ? lamps_ptr : nullptr;
++    direct_active       = false;
++    resume_mode         = -1;
++
++    if(lamps_ptr && !lamps)
++    {
++        delete lamps_ptr;
++    }
++
++    name                = controller->GetDeviceName();
++    vendor              = "8BitDo";
++    type                = DEVICE_TYPE_KEYBOARD;
++    description         = "8BitDo Retro 87 Keyboard Device (" + controller->GetConnection() + ")";
++    location            = controller->GetDeviceLocation();
++    serial              = controller->GetSerialString();
++
++    const unsigned int color_flags = MODE_FLAG_HAS_BRIGHTNESS | MODE_FLAG_HAS_MODE_SPECIFIC_COLOR;
++
++    if(lamps)
++    {
++        mode Direct;
++        Direct.name         = "Direct";
++        Direct.value        = RETRO87_MODE_DIRECT;
++        Direct.flags        = MODE_FLAG_HAS_PER_LED_COLOR;
++        Direct.color_mode   = MODE_COLORS_PER_LED;
++        modes.push_back(Direct);
++    }
++
++    modes.push_back(CreateMode("Custom",          RETRO87_MODE_CUSTOM,       MODE_FLAG_HAS_PER_LED_COLOR | MODE_FLAG_HAS_BRIGHTNESS, 0));
++    modes.push_back(CreateMode("Static",          RETRO87_MODE_SOLID,        color_flags,                                             1));
++    modes.push_back(CreateMode("Breathing",       RETRO87_MODE_BREATHING,    color_flags | MODE_FLAG_HAS_SPEED,                       1));
++    modes.push_back(CreateMode("Spectrum Cycle",  RETRO87_MODE_CYCLE,        MODE_FLAG_HAS_BRIGHTNESS | MODE_FLAG_HAS_SPEED,          0));
++    modes.push_back(CreateMode("Rainbow Wave",    RETRO87_MODE_COLOR_RIPPLE, MODE_FLAG_HAS_BRIGHTNESS | MODE_FLAG_HAS_SPEED,          0));
++    modes.push_back(CreateMode("Ripple",          RETRO87_MODE_RIPPLE,       color_flags | MODE_FLAG_HAS_SPEED,                       1));
++    modes.push_back(CreateMode("Resonance",       RETRO87_MODE_RESONANCE,    color_flags | MODE_FLAG_HAS_SPEED,                       2));
++    modes.push_back(CreateMode("Starlight",       RETRO87_MODE_STARLIGHT,    color_flags | MODE_FLAG_HAS_SPEED,                       2));
++    modes.push_back(CreateMode("Off",             RETRO87_MODE_OFF,          0,                                                       0));
++
++    SetupZones();
++
++    LoadStoredSettings();
++
++    last_mode       = active_mode;
++
++    save_running    = true;
++    save_pending    = false;
++    save_thread     = std::thread(&RGBController_EightBitDoRetro87::SaveThread, this);
++}
++
++RGBController_EightBitDoRetro87::~RGBController_EightBitDoRetro87()
++{
++    Shutdown();
++
++    /*-----------------------------------------------------*\
++    | Write a pending change, then stop the save thread     |
++    \*-----------------------------------------------------*/
++    {
++        std::lock_guard<std::mutex> lock(save_mutex);
++        save_running = false;
++    }
++    save_cv.notify_all();
++    save_thread.join();
++
++    /*-----------------------------------------------------*\
++    | Give the lighting back to the keyboard                |
++    \*-----------------------------------------------------*/
++    if(direct_active)
++    {
++        SetAutonomous(true);
++    }
++
++    delete lamps;
++    delete controller;
++}
++
++void RGBController_EightBitDoRetro87::SetAutonomous(bool autonomous)
++{
++    lamps->SetLampArrayControlReport(autonomous ? 1 : 0);
++    direct_active = !autonomous;
++}
++
++void RGBController_EightBitDoRetro87::UpdateLamps()
++{
++    LampArrayColor lamp_colors[RETRO87_CUSTOM_LED_COUNT] = {};
++
++    for(unsigned int led_idx = 0; led_idx < leds.size(); led_idx++)
++    {
++        unsigned int  first = leds[led_idx].value;
++        unsigned int  last  = (first == RETRO87_SPACE_LED) ? RETRO87_SPACE_LED_LAST : first;
++
++        for(unsigned int config_idx = first; config_idx <= last && config_idx < RETRO87_CUSTOM_LED_COUNT; config_idx++)
++        {
++            LampArrayColor& color   = lamp_colors[retro87_lamp_ids[config_idx]];
++            color.RedChannel        = RGBGetRValue(colors[led_idx]);
++            color.GreenChannel      = RGBGetGValue(colors[led_idx]);
++            color.BlueChannel       = RGBGetBValue(colors[led_idx]);
++            color.IntensityChannel  = 0xFF;
++        }
++    }
++
++    for(unsigned short first_lamp = 0; first_lamp < RETRO87_CUSTOM_LED_COUNT; first_lamp += LAMP_MULTI_UPDATE_LAMP_COUNT)
++    {
++        unsigned short  lamp_ids[LAMP_MULTI_UPDATE_LAMP_COUNT];
++        unsigned char   count   = 0;
++
++        for(; count < LAMP_MULTI_UPDATE_LAMP_COUNT && first_lamp + count < RETRO87_CUSTOM_LED_COUNT; count++)
++        {
++            lamp_ids[count] = first_lamp + count;
++        }
++
++        bool last = (first_lamp + count >= RETRO87_CUSTOM_LED_COUNT);
++
++        lamps->SetLampMultiUpdateReport(count, last ? LAMP_UPDATE_FLAG_UPDATE_COMPLETE : 0, lamp_ids, &lamp_colors[first_lamp]);
++    }
++}
++
++void RGBController_EightBitDoRetro87::SetupZones()
++{
++    KeyboardLayoutManager new_kb(KEYBOARD_LAYOUT_ANSI_QWERTY, retro87_layout.base_size, retro87_layout.key_values);
++    new_kb.ChangeKeys(retro87_layout.edit_keys);
++
++    zone keyboard_zone;
++
++    keyboard_zone.name                      = "Keyboard";
++    keyboard_zone.type                      = ZONE_TYPE_MATRIX;
++    keyboard_zone.leds_count                = new_kb.GetKeyCount();
++    keyboard_zone.leds_min                  = keyboard_zone.leds_count;
++    keyboard_zone.leds_max                  = keyboard_zone.leds_count;
++    keyboard_zone.matrix_map                = new_kb.GetKeyMap(KEYBOARD_MAP_FILL_TYPE_COUNT);
++
++    zones.push_back(keyboard_zone);
++
++    for(unsigned int led_idx = 0; led_idx < keyboard_zone.leds_count; led_idx++)
++    {
++        led new_led;
++
++        new_led.name                = new_kb.GetKeyNameAt(led_idx);
++        new_led.value               = new_kb.GetKeyValueAt(led_idx);
++
++        leds.push_back(new_led);
++    }
++
++    SetupColors();
++}
++
++void RGBController_EightBitDoRetro87::LoadStoredSettings()
++{
++    /*-----------------------------------------------------*\
++    | Show the effect and settings stored on the keyboard   |
++    \*-----------------------------------------------------*/
++    unsigned char* profile = controller->GetProfile();
++    unsigned char  current = controller->GetCurrentMode();
++
++    for(unsigned int mode_idx = 0; mode_idx < modes.size(); mode_idx++)
++    {
++        if(modes[mode_idx].value == current)
++        {
++            active_mode = mode_idx;
++        }
++    }
++
++    unsigned char block[RETRO87_CUSTOM_SIZE];
++
++    if(controller->ReadCustom(block) && block[1] == 1)
++    {
++        for(unsigned int led_idx = 0; led_idx < leds.size(); led_idx++)
++        {
++            unsigned int idx = 9 + leds[led_idx].value * 3;
++
++            colors[led_idx] = ToRGBColor(block[idx], block[idx + 1], block[idx + 2]);
++        }
++
++        for(unsigned int mode_idx = 0; mode_idx < modes.size(); mode_idx++)
++        {
++            if(modes[mode_idx].value == RETRO87_MODE_CUSTOM)
++            {
++                modes[mode_idx].brightness = block[0];
++            }
++        }
++    }
++
++    for(unsigned int mode_idx = 0; mode_idx < modes.size(); mode_idx++)
++    {
++        unsigned int offset    = 0;
++        int          color_idx = -1;
++
++        switch(modes[mode_idx].value)
++        {
++            case RETRO87_MODE_SOLID:        offset = RETRO87_PROFILE_SOLID;        color_idx = 2; break;
++            case RETRO87_MODE_CYCLE:        offset = RETRO87_PROFILE_CYCLE;                       break;
++            case RETRO87_MODE_COLOR_RIPPLE: offset = RETRO87_PROFILE_COLOR_RIPPLE;                break;
++            case RETRO87_MODE_BREATHING:    offset = RETRO87_PROFILE_BREATHING;    color_idx = 3; break;
++            case RETRO87_MODE_RIPPLE:       offset = RETRO87_PROFILE_RIPPLE;       color_idx = 3; break;
++            case RETRO87_MODE_RESONANCE:    offset = RETRO87_PROFILE_RESONANCE;    color_idx = 3; break;
++            case RETRO87_MODE_STARLIGHT:    offset = RETRO87_PROFILE_STARLIGHT;    color_idx = 4; break;
++            default:                                                                               continue;
++        }
++
++        /*-------------------------------------------------*\
++        | 0xFF brightness with 0xFF speed means unset       |
++        \*-------------------------------------------------*/
++        if(profile[offset] == 0xFF && profile[offset + 1] == 0xFF)
++        {
++            continue;
++        }
++
++        modes[mode_idx].brightness = profile[offset];
++
++        if((modes[mode_idx].flags & MODE_FLAG_HAS_SPEED) && profile[offset + 1] >= RETRO87_SPEED_FASTEST && profile[offset + 1] <= RETRO87_SPEED_SLOWEST)
++        {
++            modes[mode_idx].speed = profile[offset + 1];
++        }
++
++        for(unsigned int color = 0; color < modes[mode_idx].colors.size(); color++)
++        {
++            unsigned int idx = offset + color_idx + color * 3;
++
++            modes[mode_idx].colors[color] = ToRGBColor(profile[idx], profile[idx + 1], profile[idx + 2]);
++        }
++    }
++}
++
++void RGBController_EightBitDoRetro87::DeviceUpdateLEDs()
++{
++    if(modes[active_mode].value == RETRO87_MODE_DIRECT)
++    {
++        if(direct_active)
++        {
++            UpdateLamps();
++        }
++        return;
++    }
++
++    if(modes[active_mode].value != RETRO87_MODE_CUSTOM)
++    {
++        return;
++    }
++
++    ScheduleSave();
++}
++
++void RGBController_EightBitDoRetro87::ScheduleSave()
++{
++    /*-----------------------------------------------------*\
++    | Keep only the latest request; the save thread writes  |
++    | it at once, or when the save interval has passed      |
++    \*-----------------------------------------------------*/
++    {
++        std::lock_guard<std::mutex> lock(save_mutex);
++        save_settings   = modes[active_mode];
++        save_colors     = colors;
++        save_pending    = true;
++    }
++    save_cv.notify_all();
++}
++
++void RGBController_EightBitDoRetro87::SaveThread()
++{
++    std::unique_lock<std::mutex> lock(save_mutex);
++
++    while(true)
++    {
++        save_cv.wait(lock, [this]{ return(save_pending || !save_running); });
++
++        if(!save_pending)
++        {
++            break;
++        }
++
++        /*-------------------------------------------------*\
++        | Wait out the interval (new requests replace the   |
++        | pending one); on shutdown, write immediately      |
++        \*-------------------------------------------------*/
++        save_cv.wait_until(lock, last_save + RETRO87_SAVE_INTERVAL, [this]{ return(!save_running); });
++
++        mode                  settings   = save_settings;
++        std::vector<RGBColor> led_colors = save_colors;
++        save_pending                     = false;
++
++        lock.unlock();
++        Save(settings, led_colors);
++        lock.lock();
++
++        last_save = std::chrono::steady_clock::now();
++    }
++}
++
++void RGBController_EightBitDoRetro87::Save(const mode& settings, const std::vector<RGBColor>& led_colors)
++{
++    LOG_DEBUG("[%s] Saving mode %s (brightness %d)", name.c_str(), settings.name.c_str(), settings.brightness);
++
++    if(settings.value == RETRO87_MODE_CUSTOM)
++    {
++        RGBColor custom_colors[RETRO87_CUSTOM_LED_COUNT] = {};
++
++        for(unsigned int led_idx = 0; led_idx < leds.size() && led_idx < led_colors.size(); led_idx++)
++        {
++            custom_colors[leds[led_idx].value] = led_colors[led_idx];
++
++            /*---------------------------------------------*\
++            | The space bar has five LEDs                   |
++            \*---------------------------------------------*/
++            if(leds[led_idx].value == RETRO87_SPACE_LED)
++            {
++                for(unsigned int space_idx = RETRO87_SPACE_LED; space_idx <= RETRO87_SPACE_LED_LAST; space_idx++)
++                {
++                    custom_colors[space_idx] = led_colors[led_idx];
++                }
++            }
++        }
++
++        controller->SetCustom(settings.brightness, custom_colors);
++        return;
++    }
++
++    RGBColor     color      = settings.colors.size() > 0 ? settings.colors[0] : 0;
++    RGBColor     echo_color = settings.colors.size() > 1 ? settings.colors[1] : 0;
++    unsigned int speed      = settings.speed;
++
++    /*-----------------------------------------------------*\
++    | Never store a speed outside the range the keyboard    |
++    | accepts                                               |
++    \*-----------------------------------------------------*/
++    if(speed < RETRO87_SPEED_FASTEST || speed > RETRO87_SPEED_SLOWEST)
++    {
++        speed = RETRO87_SPEED_DEFAULT;
++    }
++
++    controller->SetMode(settings.value, settings.brightness, speed, color, echo_color);
++}
++
++void RGBController_EightBitDoRetro87::DeviceUpdateZoneLEDs(int /*zone*/)
++{
++    DeviceUpdateLEDs();
++}
++
++void RGBController_EightBitDoRetro87::DeviceUpdateSingleLED(int /*led*/)
++{
++    DeviceUpdateLEDs();
++}
++
++void RGBController_EightBitDoRetro87::DeviceUpdateMode()
++{
++    mode& current   = modes[active_mode];
++    int   previous  = last_mode;
++
++    last_mode       = active_mode;
++
++    if(current.value == RETRO87_MODE_DIRECT)
++    {
++        if(!direct_active)
++        {
++            /*---------------------------------------------*\
++            | Remember the stored effect to return to       |
++            \*---------------------------------------------*/
++            resume_mode     = previous;
++            resume_settings = modes[previous];
++            resume_colors   = colors;
++
++            SetAutonomous(false);
++        }
++
++        UpdateLamps();
++        return;
++    }
++
++    if(direct_active)
++    {
++        SetAutonomous(true);
++
++        /*-------------------------------------------------*\
++        | Back to the unchanged stored effect: the keyboard |
++        | still has it, so nothing needs to be saved        |
++        \*-------------------------------------------------*/
++        const mode& stored = resume_settings;
++
++        if(active_mode == resume_mode && current.brightness == stored.brightness && current.speed == stored.speed
++        && current.colors == stored.colors)
++        {
++            if(current.value == RETRO87_MODE_CUSTOM)
++            {
++                colors = resume_colors;
++            }
++            return;
++        }
++
++        if(current.value == RETRO87_MODE_CUSTOM)
++        {
++            colors = resume_colors;
++        }
++    }
++
++    ScheduleSave();
++}
+diff --git a/Controllers/8BitDoController/8BitDoRetro87Controller/RGBController_EightBitDoRetro87.h b/Controllers/8BitDoController/8BitDoRetro87Controller/RGBController_EightBitDoRetro87.h
+new file mode 100644
+index 0000000..671c924
+--- /dev/null
++++ b/Controllers/8BitDoController/8BitDoRetro87Controller/RGBController_EightBitDoRetro87.h
+@@ -0,0 +1,69 @@
++/*---------------------------------------------------------*\
++| RGBController_EightBitDoRetro87.h                         |
++|                                                           |
++|   RGBController for 8BitDo Retro 87 keyboard              |
++|                                                           |
++|   JoseStud                                    27 Sep 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#include <chrono>
++#include <condition_variable>
++#include <mutex>
++#include <thread>
++#include <vector>
++#include "EightBitDoRetro87Controller.h"
++#include "HIDLampArrayController.h"
++#include "RGBController.h"
++
++class RGBController_EightBitDoRetro87 : public RGBController
++{
++public:
++    RGBController_EightBitDoRetro87(EightBitDoRetro87Controller* controller_ptr, HIDLampArrayController* lamps_ptr = nullptr);
++    ~RGBController_EightBitDoRetro87();
++
++    void        SetupZones();
++
++    void        DeviceUpdateLEDs();
++    void        DeviceUpdateZoneLEDs(int zone);
++    void        DeviceUpdateSingleLED(int led);
++
++    void        DeviceUpdateMode();
++
++private:
++    EightBitDoRetro87Controller*    controller;
++
++    /*-----------------------------------------------------*\
++    | Over the USB cable: HID LampArray for Direct mode     |
++    \*-----------------------------------------------------*/
++    HIDLampArrayController*         lamps;
++    bool                            direct_active;
++    int                             last_mode;
++    int                             resume_mode;
++    mode                            resume_settings;
++    std::vector<RGBColor>           resume_colors;
++
++    /*-----------------------------------------------------*\
++    | Saved writes (effects, Custom) are coalesced so that  |
++    | slider drags or fast SDK clients cannot wear flash    |
++    \*-----------------------------------------------------*/
++    std::thread                     save_thread;
++    std::mutex                      save_mutex;
++    std::condition_variable         save_cv;
++    bool                            save_running;
++    bool                            save_pending;
++    mode                            save_settings;
++    std::vector<RGBColor>           save_colors;
++    std::chrono::steady_clock::time_point last_save;
++
++    void        LoadStoredSettings();
++    void        UpdateLamps();
++    void        SetAutonomous(bool autonomous);
++    void        ScheduleSave();
++    void        SaveThread();
++    void        Save(const mode& settings, const std::vector<RGBColor>& led_colors);
++};

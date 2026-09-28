@@ -165,6 +165,27 @@ class UsbLiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "USB cable"):
             self.live.set_enabled(True)
 
+    def test_pause_hands_back_and_resumes_by_itself(self):
+        self.live.set_enabled(True)
+        self.assertTrue(self.live.submit(self.frame(), unlocked=True))
+        self.now += LiveMirror.USB_INTERVAL
+        path = self.frame("blue")
+        closed = self.lamps.closed
+        self.live.pause(15)
+        self.assertGreater(self.lamps.closed, closed)
+        self.assertFalse(self.live.submit(path, unlocked=True))
+        self.assertEqual(self.live.target("DP-1", unlocked=True), "")
+        self.assertEqual(round(self.live.paused()), 15)
+        self.now += 16
+        self.assertEqual(self.live.paused(), 0)
+        self.assertTrue(self.live.submit(self.frame("green"), unlocked=True))
+        self.live.pause(10)
+        self.live.resume()
+        self.now += LiveMirror.USB_INTERVAL
+        self.assertTrue(self.live.target("DP-1", unlocked=True))
+        with self.assertRaises(ValueError):
+            self.live.pause(301)
+
     def test_unplugged_cable_stops_instead_of_writing_flash(self):
         self.live.set_enabled(True)
         path = self.frame()

@@ -225,3 +225,25 @@ the lamps do report: X positions of lamps 22–32 and 84–87 are 10× too large
 and those of 88–89 100×, lamp 90 reports (0, 0), lamp 29 (backspace) reports the
 backslash usage, and lamps 15 (pause), 79/80/82/83 (space bar) and 85/86
 (A/B keys) have no binding.
+
+## Protection in the OpenRGB path — 2026-09-28
+
+With OpenRGB as the only program driving the keyboard ([../OPENRGB.md](../OPENRGB.md)),
+the patched 8BitDo device coalesces saved writes to at most one per second and
+skips per-key writes identical to the last block read or written. A simulated
+brightness-slider drag in Custom mode (61 updates in 1.2 s) produced 3 saves,
+and repeating the stored Custom settings produced none (debug log
+`Per-key block unchanged; not rewritten`). Live animation uses Direct
+(LampArray) and is never saved. The configuration-path live fallback remains
+behind `--experimental-live`, which is not set in the installed units.
+
+## Endurance estimate — 2026-09-28
+
+Assuming about 100,000 erase cycles per sector (typical NOR flash, not
+confirmed for this part) and no wear levelling, per-key saves last: about
+55 years at 5 wallpaper changes a day, about 1.9 years with a 10-minute
+slideshow, about 12 days at the tray's 10-second limit, and about 28 hours
+for a client streaming into Custom at OpenRGB's one save per second. The busiest
+logged day had 27 wallpaper writes, many of them repeats from service restarts
+that the identical-write skip now avoids. Table and assumptions:
+[../OPENRGB.md](../OPENRGB.md#how-long-the-flash-lasts).
