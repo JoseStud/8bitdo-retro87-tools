@@ -1,14 +1,16 @@
 [Unit]
 Description=Retro 87 keyboard service (Plasma tray widget and keyboard backlight)
 PartOf=graphical-session.target
-After=plasma-core.target
+After=plasma-core.target retro87-openrgb.service
+# Talks to the keyboard through OpenRGB's server (unless installed with --direct).
+Wants=retro87-openrgb.service
 # PowerDevil only picks up keyboard backlights that exist when it starts.
 Before=plasma-powerdevil.service
 
 [Service]
 Type=dbus
 BusName=io.github.JoseStud.Retro87
-ExecStart=@PYTHON@ @DIR@/retro87_service.py
+ExecStart=@PYTHON@ @DIR@/retro87_service.py @ARGS@
 TimeoutStartSec=15
 Restart=on-failure
 Slice=background.slice

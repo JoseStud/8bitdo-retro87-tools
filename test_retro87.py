@@ -130,9 +130,10 @@ class ProtocolTests(unittest.TestCase):
         block = r.led_block({}, default="#123456")
         acks = [bytes([2, 4, 3, 13, 0]).ljust(64, b"\0")] + [bytes([2, 4, 3, 14, min(53, r.LED_SIZE - o)]).ljust(64, b"\0") for o in range(0, r.LED_SIZE, 53)]
         with patch.object(r.os, "write", return_value=64) as write, patch.object(r.os, "read", side_effect=acks), \
-             patch.object(r.select, "select", return_value=([123], [], [])), patch.object(r.time, "sleep"), \
+             patch.object(r.select, "select", return_value=([123], [], [])), patch.object(r.time, "sleep") as sleep, \
              patch.object(keyboard, "read_all", return_value=block):
             keyboard.write_led(block)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [0.01] + [r.LED_CHUNK_DELAY] * 6)
         sent = [call.args[1] for call in write.call_args_list]
         self.assertEqual([p[2] for p in sent], [8, 13] + [14] * 6)
         self.assertEqual(b"".join(p[10:10+p[4]] for p in sent[2:]), block)
@@ -174,6 +175,35 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(r.load_snapshot(path), (self.original, self.led))
             with self.assertRaises(FileExistsError):
                 r.save_snapshot(path, self.profile, self.led)
+
+
+class ConnectionTests(unittest.TestCase):
+    def sysfs(self, nodes):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for name, product, descriptor in nodes:
+            device = Path(tmp.name) / name / "device"
+            device.mkdir(parents=True)
+            (device / "uevent").write_text(f"HID_ID=0003:00002DC8:{product}\n")
+            (device / "report_descriptor").write_bytes(descriptor)
+        return Path(tmp.name)
+
+    def test_cable_preferred_over_dongle(self):
+        import retro87_core as core
+        root = self.sysfs([("hidraw3", "0000202E", core.DESCRIPTOR), ("hidraw9", "00002028", core.DESCRIPTOR),
+                           ("hidraw8", "00002028", b"\x05\x01")])
+        self.assertEqual(core.find_config_node(root), ("/dev/hidraw9", "USB cable"))
+
+    def test_dongle_alone_and_ambiguity(self):
+        import retro87_core as core
+        root = self.sysfs([("hidraw3", "0000202E", core.DESCRIPTOR)])
+        self.assertEqual(core.find_config_node(root), ("/dev/hidraw3", "2.4 GHz dongle"))
+        root = self.sysfs([("hidraw3", "0000202E", core.DESCRIPTOR), ("hidraw4", "0000202E", core.DESCRIPTOR)])
+        with self.assertRaisesRegex(RuntimeError, "Expected one"):
+            core.find_config_node(root)
+        with self.assertRaisesRegex(RuntimeError, "Expected one"):
+            core.find_config_node(self.sysfs([]))
+
 
 if __name__ == "__main__":
     unittest.main()

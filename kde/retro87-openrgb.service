@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenRGB SDK server for the Retro 87 tools (localhost only)
+PartOf=graphical-session.target
+After=plasma-core.target
+Before=retro87.service
+
+[Service]
+# The only program that opens the keyboard. The OpenRGB GUI and the Retro 87
+# tray service both connect to it on 127.0.0.1:6742.
+ExecStart=@OPENRGB@ --server --server-host 127.0.0.1 --noautoconnect
+Restart=on-failure
+Slice=background.slice
+
+[Install]
+WantedBy=plasma-workspace.target

@@ -91,7 +91,7 @@ ApplicationWindow {
                 color: window.deviceState.profileActive ? "#a5d6a7" : "#ffcc80"; textFormat: Text.PlainText
             }
             Item { Layout.fillWidth: true }
-            Label { text: window.deviceState.live ? "2.4 GHz dongle · last read" : "Offline · no live device state"; color: "#a5a5a5" }
+            Label { text: window.deviceState.live ? (window.deviceState.connection || "Keyboard") + " · last read" : "Offline · no live device state"; color: "#a5a5a5" }
         }
         Rectangle { Layout.fillWidth: true; height: 1; color: "#303030" }
 

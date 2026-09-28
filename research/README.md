@@ -199,3 +199,53 @@ Per-key hardware results (2026-09-27, profile active): static, breathing and
 starlight all display the stored per-key colours; brightness 30% was visibly
 dimmer and speed 10 faster than 5; starlight count 100 lit clearly more keys
 than 25; type 0 froze the last starlight frame; static at brightness 0 was dark.
+
+## Per-key write timing and dongle reads (hardware tests, 2026-09-27)
+
+Transfer speed. Per-key blocks were written with 100, 50, 20 and 0 ms before
+each `0x0e` chunk (the vendor uses 100 ms). Every chunk was acknowledged in
+6–9 ms and every block read back exactly:
+
+| Delay per chunk | Whole write (after command 8) |
+| --- | --- |
+| 100 ms | 690 ms |
+| 50 ms | 388 ms |
+| 20 ms | 209 ms |
+| 0 ms | 87–95 ms |
+
+The prepare command `0x0d` takes about 45 ms. The tools now use 20 ms
+(`LED_CHUNK_DELAY`), so a per-key write takes about 0.2 s.
+
+Display rate. Whole-keyboard red/blue frames were written with no chunk delay
+at a fixed rate and observed on the keys:
+
+| Frames per second | Observed |
+| --- | --- |
+| ~10 (back to back) | Changes skipped |
+| 4 | Only the first few changes shown |
+| 3 | Every change shown |
+| 2 | Every change shown |
+
+The keyboard acknowledges faster updates but needs about 250–330 ms to apply
+each one. Each write erases and reprograms flash: the `0x0d` prepare alone
+erases the stored block (see [storage-wear.md](storage-wear.md)).
+
+Reads come from the dongle. With the keyboard switched off (its lights stayed
+on), reads of the profile and per-key regions were still answered in about
+9 ms with the last written data, while a per-key write failed (no `0x0d`
+acknowledgment). The dongle therefore answers reads from its own copy. While
+the keyboard is connected that copy tracks it (Profile-button and
+lighting-key changes appear in reads), but a readback does not by itself
+prove what the keyboard stored.
+
+Persistence follow-up (2026-09-27): the owner reports that the custom pattern
+survived an off/on cycle with the USB cable disconnected, all lights out,
+and the dongle unplugged at startup. This strongly supports keyboard-local
+retention, but does not identify when data is saved or measure flash wear.
+The original test, whose lights never went dark, was inconclusive.
+See [storage-wear.md](storage-wear.md) for the evidence, remaining limits and
+the direct-USB LampArray investigation path. Configuration-based streaming
+should remain off for normal use; the explicit `--experimental-live` option
+does not establish endurance safety. No continuous hardware stream was run
+to validate the implementation. See
+[issue #1](https://github.com/JoseStud/8bitdo-retro87-tools/issues/1).

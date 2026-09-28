@@ -1,6 +1,11 @@
 """Session D-Bus service for KDE Plasma: backend for the tray widget and keyboard-backlight bridge.
 
-The service owns no long-lived device handle: each call opens the dongle, reads
+By default the service talks to the keyboard only through an OpenRGB SDK server
+(retro87_openrgb.py; install-kde.sh runs one as the user unit retro87-openrgb),
+so OpenRGB is the single program opening the hardware and its GUI can be used
+alongside the tray. With --direct it instead owns no long-lived device handle:
+each call opens the keyboard (USB cable or 2.4 GHz dongle, see
+retro87_core.Keyboard), reads
 the current configuration, writes only the changed ranges and verifies them by
 readback. One backup per service run is saved before its first write.
 
@@ -10,13 +15,27 @@ D-Bus (session bus), all string-typed so QML can call it without type wrappers:
     Refresh() -> s         re-read the keyboard, return state as JSON
     Set(s field, s value) -> s   state as JSON plus "ok" and "message"
         preset <name> | brightness 0-100 | speed 1-10 | color #RRGGBB |
-        echo #RRGGBB | perkey on/off
+        echo #RRGGBB | perkey on/off | wallpaper off/color/keys/live/display
+    PauseLive(s seconds) -> s   let another program use Direct: live colours stop and the
+                                lighting is handed back for up to 300 s; renew while
+                                running, it resumes by itself when the pause runs out
+    ResumeLive() -> s           end a pause early
+    WallpaperFrameTarget(s screen) -> s   leased PNG path, or empty when paused
+    DisplayFrameTarget() -> s             leased PNG path for the monitor runner
+    WallpaperFrame(s path) -> s           consume a completed wallpaper capture
     OpenApp()              start the full Retro 87 app
 
 Backlight bridge: when /dev/uleds is usable (see install-kde.sh), the service
 creates the LED "retro87::kbd_backlight". UPower exposes it as a keyboard
 backlight, so Plasma's Brightness applet and keyboard-brightness keys drive the
 current lighting brightness.
+
+Wallpaper sync: follows waywallen's current wallpaper (retro87_wallpaper.py),
+either putting its accent colour into the current effect or showing it as
+per-key colours. Live mode samples Plasma's wallpaper surface (or the display)
+and streams it to the keyboard's HID LampArray, up to ten frames a second; this
+needs the USB cable (retro87_lamparray.py). Over 2.4 GHz each frame would erase
+flash, so that fallback (two frames a second) needs --experimental-live.
 """
 import argparse
 from datetime import datetime, timezone
@@ -32,6 +51,10 @@ import time
 import uuid
 
 import retro87_core as protocol
+import retro87_openrgb as openrgb
+import retro87_wallpaper as wallpaper
+from retro87_lamparray import LampArraySink
+from retro87_live import LiveMirror
 from retro87_model import data_dir, decode, patch_bytes
 
 BUS_NAME = "io.github.JoseStud.Retro87"
@@ -49,9 +72,11 @@ class Controller:
         self.profile = self.led = None
         self.error = "Not read yet"
         self.backup = None
+        self.connection = ""
 
     def _read(self, device):
         self.profile, self.led = device.read_all(), device.read_all(15)
+        self.connection = getattr(device, "connection", "")
 
     def refresh(self):
         try:
@@ -67,7 +92,8 @@ class Controller:
 
     def status(self):
         state = {"connected": self.profile is not None and not self.error, "error": self.error,
-                 "presets": list(protocol.MODES), "backup": str(self.backup or "")}
+                 "presets": list(protocol.MODES), "backup": str(self.backup or ""),
+                 "connection": self.connection if self.profile is not None else ""}
         if self.profile is None:
             return state
         info = decode(self.profile)
@@ -132,12 +158,26 @@ class Controller:
         raise ValueError(f"Unknown setting {field!r}")
 
     def set(self, field, value):
+        return self.transaction(lambda profile, led: self.plan(profile, led, field, value))
+
+    def set_leds(self, colors, brightness=None):
+        """Show a per-key picture: static effect, keeping the current per-key brightness."""
+        def planner(profile, led):
+            if not protocol.valid_profile(profile):
+                raise ValueError("The keyboard has no profile yet. Create one in the Retro 87 app first.")
+            stored = protocol.decode_led(led)
+            level = brightness if brightness is not None else stored["brightness"] if stored["valid"] else 100
+            return protocol.led_block(colors, effect="static", brightness=level), protocol.custom_led_plan(True)
+        return self.transaction(planner)
+
+    def transaction(self, planner):
+        """Read, plan with planner(profile, led) -> (LED block, profile writes), write and verify."""
         try:
             device = self.device_factory(writable=True)
             with device:
                 self._read(device)
                 self.error = ""
-                block, writes = self.plan(self.profile, self.led, field, value)
+                block, writes = planner(self.profile, self.led)
                 writes = [(o, d) for o, d in writes if self.profile[o:o+len(d)] != d]
                 if block == self.led and not writes:
                     return self.status()
@@ -163,6 +203,12 @@ class Controller:
         return self.status()
 
 
+def config_dir():
+    value = os.environ.get("XDG_CONFIG_HOME", "")
+    root = Path(value) if value and Path(value).is_absolute() else Path.home() / ".config"
+    return root / "retro87-tools"
+
+
 def open_uleds(name=LED_NAME, maximum=LED_MAX):
     """Create a userspace LED class device; it exists while the returned fd stays open."""
     fd = os.open("/dev/uleds", os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC)
@@ -177,9 +223,15 @@ def open_uleds(name=LED_NAME, maximum=LED_MAX):
 def main():
     parser = argparse.ArgumentParser(description="Retro 87 session service for KDE Plasma")
     parser.add_argument("--no-backlight", action="store_true", help="Do not create the keyboard-backlight LED")
+    parser.add_argument("--experimental-live-wallpaper", "--experimental-live", action="store_true",
+                        help="Also allow live mode over 2.4 GHz (each frame erases the keyboard's flash)")
+    parser.add_argument("--wallpaper-screen", default="", help="Capture this Qt screen name; default: first sender")
+    parser.add_argument("--direct", action="store_true",
+                        help="Open the keyboard directly instead of going through OpenRGB")
+    parser.add_argument("--openrgb-port", type=int, default=6742, help="OpenRGB SDK server port on localhost")
     args = parser.parse_args()
 
-    from PySide6.QtCore import ClassInfo, QCoreApplication, QObject, QSocketNotifier, QTimer, Slot
+    from PySide6.QtCore import ClassInfo, QCoreApplication, QObject, QSocketNotifier, QTimer, Slot, QStandardPaths
     from PySide6.QtDBus import QDBusConnection, QDBusInterface
 
     def log(*items):
@@ -266,6 +318,103 @@ def main():
             except OSError as exc:
                 log("Backlight: cannot show the brightness:", exc.strerror)
 
+    class WallpaperSync(QObject):
+        """Follows waywallen's current wallpaper (see retro87_wallpaper.py)."""
+
+        def __init__(self, controller, on_change):
+            super().__init__()
+            self.controller, self.on_change = controller, on_change
+            self.settings = config_dir() / "service.json"
+            try:
+                self.mode = json.loads(self.settings.read_text()).get("wallpaperSync", "off")
+            except (OSError, ValueError):
+                self.mode = "off"
+            if self.mode not in wallpaper.SYNC_MODES or self.mode == "display":
+                self.mode = "off"
+            self.live = LiveMirror(controller, QStandardPaths.writableLocation(QStandardPaths.RuntimeLocation),
+                                   allowed=args.experimental_live_wallpaper, screen=args.wallpaper_screen,
+                                   lamps=LampArraySink() if args.direct else openrgb.LampSink(controller))
+            try:
+                self.live.set_enabled(self.mode == "live")
+            except ValueError:
+                self.mode = "off"
+            self.current = self.applied = None
+            self.name = ""
+            self.last_write = 0.0
+            self.poll = QTimer(self, interval=2000)
+            self.poll.timeout.connect(self._check)
+            self.poll.start()
+            # Rate limit: at most one keyboard write per MIN_INTERVAL seconds.
+            self.later = QTimer(self, singleShot=True)
+            self.later.timeout.connect(self.apply)
+
+        MIN_INTERVAL = 10
+
+        def set_mode(self, mode):
+            if mode not in wallpaper.SYNC_MODES:
+                raise ValueError(f"Wallpaper sync takes {', '.join(wallpaper.SYNC_MODES)}")
+            self.live.set_enabled(mode in ("live", "display"))
+            self.live.crop = mode != "display"
+            if mode in ("live", "display") and hasattr(self.live.lamps, "takeover"):
+                # Choosing live colours explicitly wins over a stale Direct left by another client.
+                self.live.lamps.takeover = True
+            self.mode = mode
+            self.later.stop()
+            self.settings.parent.mkdir(parents=True, exist_ok=True)
+            self.settings.write_text(json.dumps({"wallpaperSync": mode}))
+            self.applied = None
+            self.last_write = 0.0
+            self.apply()
+
+        def _check(self):
+            daemon = QDBusInterface(wallpaper.WAYWALLEN_SERVICE, wallpaper.WAYWALLEN_PATH,
+                                    wallpaper.WAYWALLEN_IFACE, QDBusConnection.sessionBus())
+            item = daemon.property("CurrentWallpaperId") if daemon.isValid() else None
+            if item != self.current:
+                self.current = item
+                info = wallpaper.wallpaper_info(item)
+                self.name = info[0] if info else ""
+                self.apply()
+
+        def apply(self):
+            if self.mode in ("off", "live", "display") or self.current is None or (self.current, self.mode) == self.applied:
+                return
+            wait = self.MIN_INTERVAL - (time.monotonic() - self.last_write)
+            if wait > 0:
+                self.later.start(int(wait * 1000))
+                return
+            info = wallpaper.wallpaper_info(self.current)
+            result = wallpaper.analyse(info[1]) if info else None
+            if not result:
+                log(f"Wallpaper: no preview for waywallen item {self.current}")
+                self.applied = (self.current, self.mode)
+                return
+            accent, keys = result
+            self.last_write = time.monotonic()
+            try:
+                if self.mode == "keys":
+                    self.controller.set_leds(keys)
+                else:
+                    state = self.controller.status()
+                    if state.get("perKey"):
+                        self.controller.set("perkey", "off")
+                        state = self.controller.status()
+                    if not state.get("hasColor"):
+                        self.controller.set("preset", "solid")
+                        state = self.controller.status()
+                    if state.get("hasEcho"):
+                        dim = "#%02x%02x%02x" % tuple(int(accent[i:i+2], 16) // 5 for i in (1, 3, 5))
+                        self.controller.set("color", dim)
+                        self.controller.set("echo", accent)
+                    else:
+                        self.controller.set("color", accent)
+                self.applied = (self.current, self.mode)
+                log(f"Wallpaper: {self.mode} from {self.name!r} (accent {accent})")
+            except (ValueError, RuntimeError, OSError) as exc:
+                self.applied = (self.current, self.mode)
+                log("Wallpaper:", exc)
+            self.on_change()
+
     @ClassInfo({"D-Bus Interface": BUS_NAME})
     class Service(QObject):
         # Errors are returned in the JSON reply: QDBusContext.sendErrorReply crashes under PySide6.
@@ -273,18 +422,78 @@ def main():
             super().__init__()
             self.controller = controller
             self.backlight = None
+            self.wallpaper = None
 
         def changed(self):
             if self.backlight:
                 self.backlight.sync(self.controller.status().get("brightness"))
 
+        def _state(self, state, message=""):
+            sync = self.wallpaper
+            usb = bool(sync and sync.live.usb())
+            return json.dumps(dict(state, ok=not message, message=message,
+                                   wallpaperSync=sync.mode if sync else "off",
+                                   wallpaperName=sync.name if sync else "",
+                                   wallpaperLiveAvailable=args.experimental_live_wallpaper or usb,
+                                   wallpaperLiveUsb=usb,
+                                   wallpaperLiveError=sync.live.error if sync else "",
+                                   wallpaperLiveFrames=sync.live.frames if sync else 0,
+                                   wallpaperLivePaused=round(sync.live.paused()) if sync else 0,
+                                   wallpaperScreen=sync.live.owner if sync else None))
+
+        def unlocked(self):
+            # Fail closed when Plasma's lock service cannot be queried.
+            lock = QDBusInterface("org.freedesktop.ScreenSaver", "/ScreenSaver",
+                                  "org.freedesktop.ScreenSaver", QDBusConnection.sessionBus())
+            reply = lock.call("GetActive")
+            return not reply.errorName() and reply.arguments() == [False]
+
+        @Slot(str, result=str)
+        def PauseLive(self, seconds):
+            try:
+                self.wallpaper.live.pause(float(seconds))
+                return self._state(self.controller.status())
+            except ValueError as exc:
+                return self._state(self.controller.status(), str(exc))
+
+        @Slot(result=str)
+        def ResumeLive(self):
+            self.wallpaper.live.resume()
+            return self._state(self.controller.status())
+
+        @Slot(str, result=str)
+        def WallpaperFrameTarget(self, screen):
+            if self.wallpaper.mode != "live":
+                return ""
+            try:
+                return self.wallpaper.live.target(screen, unlocked=self.unlocked())
+            except OSError as exc:
+                self.wallpaper.live.error = str(exc)
+                return ""
+
+        @Slot(result=str)
+        def DisplayFrameTarget(self):
+            if self.wallpaper.mode != "display":
+                return ""
+            try:
+                return self.wallpaper.live.target(self.wallpaper.live.screen or "full-display", unlocked=self.unlocked())
+            except OSError as exc:
+                self.wallpaper.live.error = str(exc)
+                return ""
+
+        @Slot(str, result=str)
+        def WallpaperFrame(self, path):
+            if self.wallpaper.live.submit(path, unlocked=self.unlocked()):
+                self.changed()
+            return self._state(self.controller.status())
+
         def _reply(self, state, message=""):
             self.changed()
-            return json.dumps(dict(state, ok=not message, message=message))
+            return self._state(state, message)
 
         @Slot(result=str)
         def Status(self):
-            return json.dumps(dict(self.controller.status(), ok=True, message=""))
+            return self._state(self.controller.status())
 
         @Slot(result=str)
         def Refresh(self):
@@ -298,12 +507,18 @@ def main():
         @Slot(str, str, result=str)
         def Set(self, field, value):
             try:
+                if field == "wallpaper":
+                    self.wallpaper.set_mode(value)
+                    return self._reply(self.controller.status())
+                # Manual lighting changes take precedence over live frames.
+                if self.wallpaper.mode in ("live", "display") and field != "brightness":
+                    self.wallpaper.set_mode("off")
                 return self._reply(self.controller.set(field, value))
             except (ValueError, RuntimeError, OSError) as exc:
                 return self._reply(self.controller.status(), str(exc))
 
     app = QCoreApplication(sys.argv)
-    controller = Controller()
+    controller = Controller() if args.direct else openrgb.Controller(openrgb.Client(port=args.openrgb_port))
     service = Service(controller)
     if not args.no_backlight:
         try:
@@ -314,6 +529,26 @@ def main():
             log(f"Backlight: disabled, /dev/uleds unavailable: {exc.strerror}{hint}")
     controller.refresh()
     log("Keyboard:", controller.error or "connected")
+    service.wallpaper = WallpaperSync(controller, service.changed)
+    app.aboutToQuit.connect(service.wallpaper.live.close)
+
+    def watch_openrgb():
+        # OpenRGB announces device-list changes (detection finished, cable plugged in or
+        # out); re-read then, and re-apply wallpaper colours once the keyboard is back.
+        was_connected = controller.status()["connected"]
+        if controller.client.sync():
+            state = controller.refresh()
+            if state["connected"] != was_connected:
+                log("Keyboard:", controller.error or f"connected through OpenRGB ({state['connection']})")
+                if state["connected"]:
+                    service.wallpaper.applied = None
+                    service.wallpaper.apply()
+            service.changed()
+
+    if not args.direct:
+        openrgb_watch = QTimer(interval=5000)
+        openrgb_watch.timeout.connect(watch_openrgb)
+        openrgb_watch.start()
 
     bus = QDBusConnection.sessionBus()
     if not bus.registerObject(OBJECT_PATH, service, QDBusConnection.RegisterOption.ExportAllSlots):
