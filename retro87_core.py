@@ -124,6 +124,10 @@ def default_profile(name, mode="resonance"):
     return bytes(image)
 
 LED_SIZE = 0x11b
+# The vendor sleeps 100 ms before each 0x0e chunk. Hardware tests (2026-09-27)
+# showed every chunk acknowledged in ~7 ms and correct readback with no delay;
+# 20 ms keeps a margin. See research/README.md, "Per-key write timing".
+LED_CHUNK_DELAY = 0.02
 # XboxLedView.initMappings (PID_XBOXJP): 87 on-screen buttons from ColorPoint.getXboxJP,
 # bottom row first, left to right. Button i drives LED i (i < 3) or LED i + 4;
 # XboxLedView.writecolor gives the space bar LEDs 3-7.
@@ -419,7 +423,7 @@ class Keyboard:
         raise TimeoutError(f"No acknowledgment for command {command:#x}; stopped without retrying")
 
     def write_led(self, block):
-        """Native writeXboxJPLed: command 0x0d, then 0x0e chunks 100 ms apart; verified by 0x0f readback."""
+        """Native writeXboxJPLed: command 0x0d, then 0x0e chunks (LED_CHUNK_DELAY apart); verified by 0x0f readback."""
         if not self.writable:
             raise PermissionError("Writes require --apply")
         if len(block) != LED_SIZE:
@@ -432,7 +436,7 @@ class Keyboard:
         self._await(13)
         offset = 0
         while offset < LED_SIZE:
-            time.sleep(0.1)
+            time.sleep(LED_CHUNK_DELAY)
             chunk = block[offset:offset+53]
             if os.write(self.fd, packet(14, offset, chunk)) != 64:
                 raise RuntimeError("Short LED write")

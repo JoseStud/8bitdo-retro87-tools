@@ -184,7 +184,7 @@ Write sequence, native `writeXboxJPLed` (`0x1043e0f0`):
 
 1. Sleep 10 ms, send command `0d` (length 0, offset 0), and wait for
    `02 04 03 0d`.
-2. For offset 0 up to 283: sleep 100 ms, then send command `0e` with up to
+2. For offset 0 up to 283: sleep (vendor 100 ms; the tools use 20 ms), then send command `0e` with up to
    53 bytes at that offset. Wait for `02 04 03 0e LEN` and advance the offset
    by `LEN`.
 3. (Tools) Read the region back with command `0f` and compare.
