@@ -94,6 +94,19 @@ built-in preset switches back.
   and responds to the keyboard-brightness keys (5 steps). The slider sets the
   current preset's brightness, or the per-key brightness in per-key mode.
 
+- **Match wallpaper** (tray widget): follows the wallpaper playing in
+  [waywallen](https://github.com/waywallen/waywallen) and updates whenever it
+  changes. *Colour* puts the wallpaper's main colour into the current effect
+  (the highlight for Resonance/Starlight; effects without a colour switch to
+  Solid). *Picture on keys* spreads the wallpaper over the keys as per-key
+  colours. Colours come from waywallen's preview image for each wallpaper.
+
+  It cannot mirror an animated wallpaper frame by frame. The keyboard
+  displays at most about 3 per-key updates per second, and it may store each
+  one permanently (not yet confirmed), so streaming could wear its storage. For motion, use Colour with one of the keyboard's
+  own animated effects (Breathing, Starlight, Ripple). Writes are limited to
+  one per wallpaper change, at most every 10 seconds.
+
 Both use a user service, `retro87_service.py` (`systemctl --user status retro87`,
 log in `journalctl --user -u retro87`). It opens the dongle only for each
 change, reads it first, writes the changed bytes, verifies them, and saves one
@@ -142,7 +155,7 @@ restore them with `led` or the GUI.
 ## Tests
 
 ```sh
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model test_gui test_service   # 63 tests, no hardware
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model test_gui test_service test_wallpaper   # 68 tests, no hardware
 ```
 
 The tests cover packet encoding, acknowledgment/readback handling, every
