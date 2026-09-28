@@ -43,7 +43,8 @@ if [[ "${1:-}" != "--no-backlight" ]]; then
     render "$dir/kde/70-retro87-backlight.rules" | sudo tee "$rules" >/dev/null
     echo uleds | sudo tee "$modules" >/dev/null
     sudo udevadm control --reload
-    sudo modprobe uleds
+    # Already loaded after a kernel update, modprobe cannot find the old kernel's modules.
+    [[ -d /sys/module/uleds ]] || sudo modprobe uleds
     sudo udevadm trigger --action=add /sys/devices/virtual/misc/uleds
 fi
 
