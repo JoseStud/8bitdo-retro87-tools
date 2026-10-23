@@ -165,12 +165,57 @@ Metadata fields in managed declaration order: uint32 flag; byte source key;
 32-byte UTF-16BE name; uint16 step count; uint16 interval; byte repeat;
 byte repeat type; uint16 unify time; uint16 reserved. Padding/alignment must
 still be verified rather than guessed. Event fields: byte key state, byte key
-code, uint16 timer; enum state constants remain to be confirmed.
+code, uint16 timer. The enum constants are now confirmed: press = 1,
+release = 2, interval = 3 (V1.35 Constant table). Timer placement semantics
+and the full repeat behavior still need tracing before compiling local events.
 
-Before implementation: prove read coverage of the entire affected erase unit,
-metadata alignment, key-state/repeat enums, allocation limits, and restoration
-of unused bytes. Current snapshots omit macro storage. No macro commands are
-accepted by the current transport, and none were sent to the keyboard.
+Before hardware writing: prove the affected erase unit, metadata alignment,
+repeat/timer semantics, allocation limits, and restoration of unused bytes.
+Ordinary snapshots still omit macro storage. Command 7 is now supported for
+read-only backup; commands 5 and 6 remain rejected.
+
+### Super Buttons and macro reads (2026-09-28)
+
+Recovered again from the official V1.35 archive using the static tools above:
+
+- `BasicJPAdvanceUIData.setMacro` (`0x1ae2c0`) maps extension enums 154–161
+  to metadata source-key values 108–115. These are profile **slot numbers**,
+  not HID key codes; all extension source records have code `0xf3`.
+- `XboxMacroView.Button_Down` (`0xfd748`) and `InitMapping` (`0xfcc78`)
+  select these ordered pairs for the vendor UI's ports: A = K1/K2,
+  B = K4/K3, X = K5/K6, Y = K8/K7. This does not establish the physical
+  left-to-right jack orientation or which half of the user's accessory is first.
+  Live identification subsequently reported **K7, then K8** when the user pressed
+  the accessory plugged into their first physical jack: that jack is the vendor
+  Y pair. Do not infer K1/K2 from “first jack”.
+- `XboxMacroView.readKey` (`0xf8fac`) requests `reportID(1)` and reads only
+  while its macro view is active. K1–K6 are bits 2–7 of report byte 26;
+  K7/K8 are bits 0/1 of byte 27. Ordinary key bytes are not needed.
+- `ReportXbox` (`0x1041b6e0`) → `0x1040a7d0` → `0x1040a8b0` puts mode 1
+  in header byte 3: `81 04 08 01 00 00 00 00 00 00` padded to 64 bytes.
+  Mode 0 restores configuration mode. This is a temporary report-mode change,
+  not a stored setting. Hardware replies were `02 04 03 08` (ack) and
+  `02 04 03 09` (64-byte input reports). A two-second USB probe restored mode 0
+  and confirmed the profile was byte-for-byte unchanged.
+- `readXboxJPMacro` (`0x1042cd80`) reads command 7 at explicit addresses in
+  chunks of at most 53 bytes. `readXboxJPMacroInfo` (`0x1042cfd0`) reads 48
+  bytes. `getMacroAddress` considers MacroDatas1–10 and aligns allocations to
+  4096 bytes. The implementation conservatively reads only these ten blocks
+  (`0x0000` through `0x9fff`), not the whole 16-bit address space.
+- All ten 4096-byte allocations were read twice successfully over USB. Every
+  byte was `ff`. Profile and custom LED readbacks also matched. The private
+  local backup is `backups/super-buttons-before-macros-2026-09-28.json`.
+  This proves read coverage of these allocations, **not** the erase extent,
+  hardware macro playback, or restoration.
+
+`retro87_buttons.py` exposes a focused, 30-second identification window. It
+filters for the observed input-report header and discards all ordinary key data.
+Stop, focus loss, timeout, errors and normal close restore mode 0 and release
+our device lock. A process kill/power loss cannot run cleanup; reconnect if needed.
+`retro87_macro_backup.py` reads each full allocation twice and writes a separate
+backup format with the profile, LEDs, raw blocks and block hashes. It refuses
+references outside the known ten-block allocation and never overwrites a file.
+
 
 ## Per-key custom lighting (implemented, hardware-verified 2026-09-27)
 

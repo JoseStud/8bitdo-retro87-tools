@@ -24,7 +24,8 @@ for the full hardware test log.
 | Vendor default profile image | Written and verified by readback; the profile then activates |
 | Per-key LED block, layout, write sequence and all effects | Hardware-verified |
 | Key remapping records, sound level | Vendor code and tests only |
-| Macros, sleep settings, mouse/media assignments | Not implemented |
+| Macro storage reads | Ten complete 4 KiB blocks read twice over USB; writes/restoration unavailable |
+| Macro playback/assignment, sleep settings, mouse/media assignments | Not implemented |
 
 ## Sources
 
@@ -226,3 +227,19 @@ The A and B keys (`ka`, `kb`) were identified on hardware. `LED_KEYS` in
 | `ReadXboxJPflag` | `1041b470` | Reads `0x24`; active iff 1 |
 | `ReportXbox` | `1041b6e0` | Command 8 |
 | `ReadLightingState` | `104196d0` | Command `10`; returns byte == 1 |
+
+## Super Button identification and macro backups
+
+The local macro editor can save a K1–K8 target, but does not apply that assignment.
+Vendor port pairs are A: K1/K2, B: K4/K3, X: K5/K6, Y: K8/K7. Use the focused
+identification window to establish physical button identity. It switches command 8
+header byte 3 to 1 temporarily and restores 0 when stopped or unfocused.
+Only command-9 input reports (`02 04 03 09`, 64 bytes) are decoded, and only
+extension bits (byte 26 bits 2–7; byte 27 bits 0–1) are exposed.
+
+Command 7 reads macro storage. The tool bounds it to the vendor's ten 4096-byte
+allocations and captures the padding/unused bytes as well as metadata and events.
+`retro87-macro-backup` files are separate from ordinary snapshots and local
+`retro87-macro` editor files. Capturing those blocks does not prove command 5's
+erase extent. Commands 5/6 and hardware assignment remain disabled pending that
+proof, metadata/timing validation and restoration testing. See research/README.md.
