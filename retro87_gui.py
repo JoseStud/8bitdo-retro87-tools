@@ -3,12 +3,13 @@ import argparse
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QObject, Property, QRunnable, QThreadPool, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Property, QProcess, QRunnable, QThreadPool, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
 import retro87_core as protocol
+from retro87_macros import MacroEditor
 from retro87_layout import keyboard_layout, label
 from retro87_model import ApplyFailure, Draft, Snapshot, apply_draft, data_dir, decode
 
@@ -37,6 +38,7 @@ class Controller(QObject):
 
     def __init__(self, snapshot=None, allow_writes=False, device_factory=protocol.Keyboard):
         super().__init__()
+        self.macros = MacroEditor(self)
         self.draft = Draft(snapshot) if snapshot else None
         self.allow_writes = allow_writes
         self.device_factory = device_factory
@@ -50,6 +52,31 @@ class Controller(QObject):
         self.pool.setMaxThreadCount(1)
         self.job = None
         self.callback = None
+
+    @Property(QObject, constant=True)
+    def macroEditor(self):
+        return self.macros
+
+    @Slot()
+    def identifyButtons(self):
+        if self.busy:
+            return
+        started, _ = QProcess.startDetached(sys.executable, [str(protocol.ROOT / "retro87_buttons.py")])
+        self.error = "" if started else "Could not open Super Button identification"
+        self.changed.emit()
+
+    @Slot(str, bool)
+    def macroFile(self, url, save):
+        try:
+            path = self._path(url)
+        except ValueError as exc:
+            self.macros.error = str(exc)
+            self.macros.changed.emit()
+            return
+        if save:
+            self.macros.save(str(path))
+        else:
+            self.macros.load(str(path))
 
     @Property("QVariantMap", notify=changed)
     def state(self):

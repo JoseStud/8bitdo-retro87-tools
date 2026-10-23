@@ -68,7 +68,7 @@ and `research/inspect_vendor.py`. Do not redistribute vendor binaries or artwork
 | --- | --- | --- | --- |
 | Shell | XboxSettingMenuView: Mapping, Macro, Voice, Led, ProfileName | Native QML shell, staged Apply and review | Interactive accessibility review |
 | Keys | XboxMappingView: category controls, source/target, Win/Tab/F4 switches | Single key/modifier/none plans | Trace advanced categories, combinations and shortcut switches |
-| Macros | XboxMacroView; MacroSettingXbox: event list, delay, repeat, record, save | None | Decode storage, limits, assignment, backup and safe restoration |
+| Macros | XboxMacroView; MacroSettingXbox: event list, delay, repeat, record, save | Local event editor, delays, finite repeats, JSON import/export, K1–K8 target intent and focused identification; full-allocation read-only backup | Decode storage, limits, assignment, backup and safe restoration |
 | Lighting | XboxLedView: Preset/Custom, modes, direction, color, brightness, speed, count | All eight preset codecs, per-key editor, LED backup/restore | Per-preset hardware checks beyond breathing |
 | Volume | XboxVoiceView: voice, progress, voice button | Staged 1–5 control; native write offset confirmed | Hardware behavior validation |
 | Profiles | Profile menu and names | Explicit creation, rename, offline import/export, profile backup/restore | Full macro backup coverage and hardware lifecycle validation |
@@ -89,3 +89,27 @@ buttons. It establishes layout, not exact Panther artwork or all current labels.
 - On write failure, report partial state and stop, no automatic retries/rollback.
 - Test disconnect, contention, access denial, stale edits and backup failure.
 - Capture only focused macro-editor input; never run a global key logger.
+
+### Local macro editor (2026-09-28)
+
+- Added independent local macro documents with key-down/up events, per-event
+  delays, ordering, removal and finite repeat counts. New/open/save/discard
+  controls use the existing native page styling.
+- Versioned JSON files are distinct from device snapshots. Import validation,
+  exclusive file creation and unsaved-edit guards protect local documents.
+- Sequence diagnostics report duplicate presses and missing releases; incomplete
+  drafts remain saveable. No recording, playback, assignment or device codec.
+- Hardware macro work still needs the protocol evidence listed in research/README.md.
+
+### Super Button preparation (2026-09-28)
+
+- Traced vendor port pairs and input-report extension bits. Added a focused
+  identification window with timeout, focus-loss cleanup and mode restoration.
+- Live identification of the user's first accessory jack reported K7 then K8
+  (vendor Y pair). Ordinary key data was not recorded.
+- Added optional K1–K8 target intent to local macro documents (version 2, with
+  version 1 import compatibility). This does not stage a hardware assignment.
+- Added bounded command-7 macro reads and a separate ten-allocation raw backup.
+  On hardware all ten blocks read as `ff`, with two matching reads per block.
+- Hardware macro writes remain unavailable pending erase-extent proof, complete
+  metadata/timing semantics and restoration validation.

@@ -104,6 +104,20 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(len(matches), 1, f"Dialog button {text}")
         return matches[0]
 
+    def test_macro_editor_is_independent_of_device_draft(self):
+        for width, height in [(1200, 800), (1000, 700)]:
+            with self.subTest(size=(width, height)), self.rendered(width, height) as window:
+                window.setProperty("page", 1)
+                QTest.qWait(30)
+                self.click(window, "addMacroEvent")
+                self.assertEqual(len(self.controller.macros.document.events), 1)
+                self.assertTrue(self.controller.macros.state["dirty"])
+                self.assertFalse(self.controller.state["dirty"])
+                self.assertFalse(self.controller.state["canApply"])
+                self.click(window, "discardMacro")
+                self.click(window, self.dialog_button(window, "macroDiscardDialog", "Yes"))
+                self.assertFalse(self.controller.macros.state["dirty"])
+
     def test_review_empty_state_mouse_and_keyboard(self):
         for width, height in [(1200, 800), (1000, 700)]:
             with self.subTest(size=(width, height)), self.rendered(width, height) as window:

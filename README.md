@@ -72,13 +72,43 @@ sed "s|@DIR@|$PWD|g" retro87-tools.desktop > ~/.local/share/applications/retro87
 ./run-gui --snapshot original-config.json   # offline, no device access
 ```
 
-Pages: Keys (remapping), Macros (status only), Volume (device sound level),
+Pages: Keys (remapping), Macros (local editor), Volume (device sound level),
 Lighting (presets and the per-key editor) and Profiles (create/rename,
 snapshots, restore). Edits are staged in memory. **Review changes** lists
 every byte range; **Apply** re-reads the keyboard and refuses if it changed
 since loading (the Profile and lighting keys also change it). It then writes a
 backup to `~/.local/share/retro87-tools/backups`, writes, and verifies by
 readback. After a failure it stops without retrying; restore from the backup.
+
+**Macros**: build key-down/key-up sequences, edit the delay before each event
+in milliseconds, reorder/remove events, and set a finite repeat count. The
+editor reports unmatched presses/releases and allows up to 1008 events.
+**Save as…** saves a separate, versioned `retro87-macro` JSON document to a new
+file; **Open…** loads it. Save or discard edits before opening another macro.
+Incomplete sequences can be saved as drafts. Select a **Super Button target**
+(K1–K8) to save the intended trigger in the file. Version 2 adds that target;
+version 1 files still open as unassigned. This does **not** program the button.
+Macro edits are independent of profile snapshots, Review and Apply. Recording,
+playback and hardware macro assignment/restoration remain unavailable.
+
+**Identify buttons…** opens a separate, focused window. Click Start and press
+each Super Button to see its K number. Identification stops on focus loss or
+after 30 seconds and restores normal report mode. It shows only extension inputs,
+not ordinary typing. Vendor port pairs are A: K1/K2, B: K4/K3, X: K5/K6,
+Y: K8/K7; use identification to confirm your physical buttons.
+
+To run identification directly or capture a full read-only macro backup:
+
+```sh
+.venv/bin/python retro87_buttons.py
+.venv/bin/python retro87_macro_backup.py backups/macros-before-changes.json
+```
+
+The backup includes the profile, LEDs and all ten complete 4096-byte macro
+allocations, each read twice for consistency. It uses a separate backup format
+and refuses to overwrite an existing file. Ordinary profile snapshots still omit
+macros. Hardware macro erase/write commands remain disabled until their erase
+extent and restoration behavior are established.
 
 **Per-key lighting** (Lighting page, lower section): click a key, Ctrl+click
 to add more, enter `#RRGGBB`, then **Colour selected**. Choose an effect,
