@@ -119,8 +119,9 @@ built-in preset switches back.
 ## KDE Plasma integration
 
 ```sh
-OPENRGB=/path/to/openrgb ./install-kde.sh   # asks for sudo once, for udev rules and the backlight
+./install-kde.sh                            # asks for sudo once, for udev rules and the backlight
 ./install-kde.sh --no-backlight             # no root; keeps previously installed udev rules
+OPENRGB=/path/to/openrgb ./install-kde.sh   # use this OpenRGB binary instead of the auto-updated build
 ./install-kde.sh --direct                   # without OpenRGB (see below)
 ./install-kde.sh --uninstall
 ```
@@ -134,8 +135,10 @@ OpenRGB's SDK server as the user unit `retro87-openrgb` (localhost only), and
 the tray service sends every change through it. The OpenRGB GUI can be used at
 the same time: started while the server runs, it connects to it instead of
 opening devices. This needs an OpenRGB build with the Retro 87 support (the
-8BitDo controller, and the HID LampArray changes for the USB cable); the
-binary comes from `$OPENRGB` or `PATH`. In OpenRGB the keyboard is one device,
+8BitDo controller, and the HID LampArray changes for the USB cable). By
+default the installer builds one locally and keeps it current with a daily
+user timer (`update-openrgb.sh`); `OPENRGB=` selects another binary, such as
+the fork's release AppImage. In OpenRGB the keyboard is one device,
 **8BitDo Retro 87 Mecha BREAK**: the stored effects and the stored per-key
 picture (*Custom*) work over the dongle or the cable and are saved on the
 keyboard; over the cable it also has **Direct**, runtime per-key colours

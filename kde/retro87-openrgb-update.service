@@ -1,0 +1,12 @@
+[Unit]
+Description=Update the local OpenRGB build with the Retro 87 patch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@DIR@/update-openrgb.sh
+Nice=15
+IOSchedulingClass=idle
+Slice=background.slice
+TimeoutStartSec=2h

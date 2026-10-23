@@ -2,9 +2,10 @@
 
 OpenRGB is the only program that opens the keyboard. It runs as a local SDK
 server; the Plasma tray service and the OpenRGB GUI are both clients of it.
-This needs an OpenRGB build with the Retro 87 support: the fork
+This needs an OpenRGB build with the Retro 87 support. By default
+`install-kde.sh` keeps one built locally and up to date; the fork
 [JoseStud/OpenRGB-8BitDo-Retro87](https://github.com/JoseStud/OpenRGB-8BitDo-Retro87)
-publishes one automatically, or build it from
+publishes ready-made AppImages; or build it yourself from
 [openrgb/retro87-openrgb.patch](openrgb/retro87-openrgb.patch).
 
 ```text
@@ -27,7 +28,42 @@ backups). The desktop app (`run-gui`) and the CLI always open it directly.
 
 ## Setup
 
-### Option 1: the fork's release
+### Option 1: automatic local build (default)
+
+```sh
+./install-kde.sh
+```
+
+Without `OPENRGB`, the installer uses a local build that
+[update-openrgb.sh](update-openrgb.sh) keeps current, and enables the user
+timer `retro87-openrgb-update` (daily, catching up after downtime). Each run:
+
+1. Fetches upstream OpenRGB `master` and reads `openrgb/retro87-openrgb.patch`
+   from this checkout. If neither changed since the last build, it stops.
+2. Resets its own source tree to upstream, applies the patch, and builds in
+   `~/.local/share/retro87-tools/openrgb` (`src/`, `build/`; set
+   `RETRO87_OPENRGB_DIR` to move it). A development checkout such as
+   `~/OpenRGB` is never touched.
+3. Only after a successful build and a start check, replaces `bin/openrgb`
+   and restarts `retro87-openrgb`. If the patch does not apply or the build
+   fails, the previous binary stays in use, the reason is logged, and a
+   desktop notification appears.
+
+It needs `qmake6`, `make` and OpenRGB's build dependencies (Qt 6, libusb,
+hidapi, mbedtls). The first build runs in the background after installing
+and takes several minutes; `retro87-openrgb` starts when it is done. Later
+builds only recompile what changed.
+
+```sh
+journalctl --user -u retro87-openrgb-update     # what the last runs did
+systemctl --user start retro87-openrgb-update   # update now
+./update-openrgb.sh --force                     # rebuild even if nothing changed
+```
+
+Pulling a newer version of this repository brings a newer patch, which the
+next run builds.
+
+### Option 2: the fork's release
 
 [OpenRGB-8BitDo-Retro87](https://github.com/JoseStud/OpenRGB-8BitDo-Retro87)
 follows upstream OpenRGB. A daily GitHub Actions workflow applies the patch to
@@ -36,17 +72,15 @@ publishes it as a release when upstream or the patch changed; if the patch
 stops applying or the build fails it opens an issue instead. Its `retro87`
 branch holds the patched source. Download the latest
 `OpenRGB-8BitDo-Retro87-x86_64.AppImage`, check it against its `.sha256`, make
-it executable and install with it:
+it executable and install with it (no automatic updates; download newer
+releases yourself):
 
 ```sh
 chmod +x ~/Applications/OpenRGB-8BitDo-Retro87-x86_64.AppImage
 OPENRGB=~/Applications/OpenRGB-8BitDo-Retro87-x86_64.AppImage ./install-kde.sh
 ```
 
-The fork's `patches/` is the maintained copy of the patch; when it changes,
-update [openrgb/retro87-openrgb.patch](openrgb/retro87-openrgb.patch) here too.
-
-### Option 2: build it yourself
+### Option 3: build it yourself
 
 Build OpenRGB with the patch. It was made against OpenRGB commit `d008deb`
 and also applies to `c1784ca` (upstream `master` on 2026-09-28):
@@ -321,6 +355,70 @@ error.
 Clients other than the tray cannot see who holds Direct: the SDK has no
 ownership or locking. Third-party apps that stream Direct without pausing the
 tray will still conflict with its live animation; turn one of them off.
+
+## Maintaining the fork
+
+The fork is a **patch queue** (the layout used by VSCodium, LibreWolf and
+distribution packaging): its `main` holds the patch and the automation, and
+builds are made from upstream plus the patch. This was chosen over a
+Git-native fork (the OpenRGB changes as real commits on a `retro87` branch,
+with upstream merged in) because the OpenRGB side is expected to change
+rarely. A patch queue needs no merging, no tokens, and no conflict work
+unless the patch itself stops applying. If the OpenRGB code starts to see
+active development (new drivers, branches, pull requests), a Git-native fork
+would suit better; the fork's README explains the trade-offs.
+
+**Custom LED states need no fork changes.** New lighting modes, states or
+animations are SDK clients (scripts like
+[examples/direct_wave.py](examples/direct_wave.py), or modes in the tray)
+using the modes the patched OpenRGB already has: Direct, Custom and the
+effects. They live in this repository and take effect when run, with no
+patch change, rebuild or release.
+
+**When the OpenRGB side does change** (a fix in the 8BitDo device, another
+keyboard), there are two copies of the patch, synchronised by hand:
+
+1. Change and test the code in a development checkout (for example
+   `~/OpenRGB` on upstream `master`), then export it here:
+   ```sh
+   cd ~/OpenRGB
+   { git diff; git ls-files --others --exclude-standard Controllers/8BitDoController \
+       | xargs -rI{} git diff --no-index /dev/null {}; } \
+       > ~/8bitdo-retro87-tools/openrgb/retro87-openrgb.patch
+   ```
+   Commit it in this repository. The local automatic build picks it up on its
+   next run.
+2. Copy the same file to the fork's `patches/0001-8bitdo-retro87.patch` and
+   push to its `main`. That push starts the fork's workflow, which releases a
+   new AppImage.
+
+Both copies should stay byte-identical; the release tag ends in the first 10
+hex digits of the patch's SHA-256 (`...-p<hash>`), which
+`sha256sum openrgb/retro87-openrgb.patch` can be compared with.
+
+### AUR packaging (planned, not published)
+
+Arch packages are a possible later step; for now the local automatic build
+(Option 1) is used and nothing is published. Checked on 2026-09-28: the
+official `openrgb` (1.0, `extra`) lacks these changes; the AUR has variants
+such as `openrgb-git` and `openrgb-next-git`; the names
+`openrgb-8bitdo-retro87` and `8bitdo-retro87-tools` are free.
+
+- **`openrgb-8bitdo-retro87`** (first): a source PKGBUILD pinned to the fork's
+  latest release, upstream at a fixed commit plus the fork's patch, both with
+  SHA-256 checksums, `provides`/`conflicts` `openrgb`. Each fork release needs
+  a PKGBUILD update (version, commit, checksums) pushed to the AUR: by hand, or
+  from the fork's workflow with an AUR SSH key the owner stores as a repository
+  secret. Installing it would replace the local automatic build; point
+  `install-kde.sh` at `/usr/bin/openrgb` (`OPENRGB=/usr/bin/openrgb`).
+- **`8bitdo-retro87-tools`** (later): needs the tools made installable
+  system-wide first: no Git checkout or `.venv` paths (Arch's `pyside6`
+  instead of pip), files under `/usr/share`, and per-user setup (widget, user
+  units) separated from what a package installs (udev rules, units).
+- **Prerequisites:** an AUR account with an SSH key (set up by the owner), a
+  local `makepkg` test of each PKGBUILD, and an explicit decision to publish,
+  since a push to the AUR is public at once. Mention in the package
+  descriptions that the OpenRGB changes are AI-assisted and not upstream.
 
 ## Changes in the OpenRGB patch
 
