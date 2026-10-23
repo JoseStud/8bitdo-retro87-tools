@@ -329,3 +329,16 @@ do not include or redistribute any vendor binaries or artwork.
 ## License
 
 MIT; see [LICENSE](LICENSE).
+
+## Change the wallpaper with the Super Buttons
+
+`retro87_chord.py` calls waywallen's `Next` when both Super Buttons (default
+K7+K8, see `--keys`) are held together; `--previous` goes back instead. It uses
+the temporary report mode of the identification window and writes nothing to the
+keyboard, but it holds the configuration interface, so stop it before using the
+GUI. Run it with `.venv/bin/python retro87_chord.py`, or install it as a user
+unit (not done by `install-kde.sh`):
+
+```bash
+sed -e "s|@DIR@|$PWD|g" -e "s|@PYTHON@|$PWD/.venv/bin/python|g" kde/retro87-chord.service > ~/.config/systemd/user/retro87-chord.service && systemctl --user daemon-reload && systemctl --user enable --now retro87-chord
+```

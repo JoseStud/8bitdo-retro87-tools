@@ -1,0 +1,13 @@
+[Unit]
+Description=Change the wallpaper when both Retro 87 Super Buttons are held
+PartOf=graphical-session.target
+After=plasma-core.target
+
+[Service]
+# Holds the keyboard's configuration interface: stop it before using the Retro 87 GUI.
+ExecStart=@PYTHON@ @DIR@/retro87_chord.py
+Restart=on-failure
+Slice=background.slice
+
+[Install]
+WantedBy=plasma-workspace.target
