@@ -294,3 +294,31 @@ should remain off for normal use; the explicit `--experimental-live` option
 does not establish endurance safety. No continuous hardware stream was run
 to validate the implementation. See
 [issue #1](https://github.com/JoseStud/8bitdo-retro87-tools/issues/1).
+
+## LED idle timeout experiment (2026-09-28)
+
+The user observed lights switching off while idle and waking on a normal key,
+then explicitly requested always-on lighting. Live USB profile had `leds_sleep`
+(offset `0x5cc`, uint32 LE) = 300. `writeXboxJPSleep` at `0x1043e890`
+writes exactly four bytes there using command 1. The managed wrapper
+`XboxJPAdvance.writeSleep` sets report mode 0 and sleeps 10 ms before writing.
+`XboxJPAdvanceUI.PrepareWrite` copies `KeyBoardColor.leds_sleep` directly; no
+confirmed never-sleep selector or zero-disable semantics were found in V1.35.
+
+Applied **zero as an experimental disabled-timeout value**, as authorized by the
+user, after saving `backups/20260928T201455Z-before-led-always-on.json` and
+comparing a fresh snapshot to the baseline. Full profile and custom LED readback
+confirmed only the timeout changed (300 → 0). No macro storage was written.
+**An idle observation longer than five minutes is still needed to confirm that
+zero means always-on on this firmware.** Do not describe that behavior as verified
+or expose an always-on UI guarantee until it has been observed. The backup retains
+the previous 300-second value for a targeted restoration if required.
+
+### Follow-up (2026-09-30)
+
+Live read showed `leds_sleep` = **60**, not the 0 written on 2026-09-28, so the
+firmware appears to reject or reset zero (inferred, not proven). Lights were
+switching off after about a minute. Wrote **65535** (uint32 LE, about 18 h) to
+`0x5cc`; readback confirmed. Backup of the resulting state:
+`backups/20260930-after-led-sleep-65535.json` (local only, `backups/` is
+git-ignored). An idle observation confirming the lights stay on is still pending.
