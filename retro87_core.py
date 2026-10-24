@@ -20,6 +20,9 @@ DESCRIPTOR = bytes.fromhex("06a0ff0901a1018502150026ff00190129027508953f81028581
 # in, the dongle's configuration requests no longer reach the keyboard.
 CONNECTIONS = {"00002028": "USB cable", "0000202E": "2.4 GHz dongle"}
 PROFILE_SIZE = 0x5fc
+MACRO_BLOCK_SIZE = 4096
+# Vendor UI exposes ten macro records; do not probe beyond that allocation.
+MACRO_STORAGE_SIZE = 10 * MACRO_BLOCK_SIZE
 PROFILE_FLAG = 0x20200902
 PROFILE_ACTIVE_TIP = ("The profile is not active (byte 0x24 is not 1): the keyboard ignores stored lighting "
                       "settings and uses its onboard ones. Press the keyboard's Profile button once to activate it.")
@@ -38,12 +41,13 @@ THEMES = {"solid": (0x5d0, 5), "cycle": (0x5d5, 2), "color-ripple": (0x5d7, 3),
           "resonance": (0x5e6, 9), "starlight": (0x5ef, 10)}
 
 def packet(command, offset=0, payload=b"", read_size=0):
-    if command not in (1, 2, 8, 13, 14, 15):
+    if command not in (1, 2, 7, 8, 13, 14, 15):
         raise ValueError("Unsupported command")
-    size = read_size if command in (2, 15) else len(payload)
-    if not 0 <= size <= 53 or not 0 <= offset < PROFILE_SIZE:
+    size = read_size if command in (2, 7, 15) else len(payload)
+    limit = MACRO_STORAGE_SIZE if command == 7 else PROFILE_SIZE
+    if not 0 <= size <= 53 or not 0 <= offset < limit or offset + size > limit:
         raise ValueError("Invalid packet range")
-    if command in (2, 15, 8, 13) and payload:
+    if command in (2, 7, 15, 8, 13) and payload:
         raise ValueError("Unexpected payload")
     return (bytes([0x81, 4, command, 0, size, sum(payload) & 255]) + struct.pack("<I", offset) + payload).ljust(64, b"\0")
 
@@ -365,9 +369,9 @@ class Keyboard:
         os.close(self.fd)
 
     def read(self, offset, size, command=2):
-        if command not in (2, 15):
-            raise ValueError("Only profile and LED reads are supported")
-        limit = PROFILE_SIZE if command == 2 else 0x11b
+        if command not in (2, 7, 15):
+            raise ValueError("Only profile, macro and LED reads are supported")
+        limit = {2: PROFILE_SIZE, 7: MACRO_STORAGE_SIZE, 15: 0x11b}[command]
         if not 0 <= offset < limit or not 1 <= size <= 53 or offset+size > limit:
             raise ValueError("Invalid read range")
         request = packet(command, offset, read_size=size)
@@ -459,7 +463,18 @@ class Keyboard:
         if self.read_all(15) != block:
             raise RuntimeError("Custom LED readback mismatch; stopped. Use the saved backup to inspect/recover.")
 
+    def read_macro_block(self, address):
+        """Read the complete allocation, including padding and unused event bytes."""
+        if type(address) is not int or address % MACRO_BLOCK_SIZE or not 0 <= address < MACRO_STORAGE_SIZE:
+            raise ValueError("Expected an aligned macro block in the ten-slot allocation")
+        result = bytearray()
+        while len(result) < MACRO_BLOCK_SIZE:
+            result.extend(self.read(address + len(result), min(53, MACRO_BLOCK_SIZE - len(result)), 7))
+        return bytes(result)
+
     def read_all(self, command=2):
+        if command not in (2, 15):
+            raise ValueError("Use read_macro_block for macro storage")
         size = PROFILE_SIZE if command == 2 else 0x11b
         result = bytearray()
         while len(result) < size:

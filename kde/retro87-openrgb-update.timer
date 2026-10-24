@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily update of the local OpenRGB build with the Retro 87 patch
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

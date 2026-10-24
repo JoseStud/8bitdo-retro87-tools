@@ -8,8 +8,10 @@
 #   ./install-kde.sh --uninstall     remove everything this script installed
 #
 # By default the keyboard is driven through an OpenRGB server run as the user
-# unit retro87-openrgb (OpenRGB with the Retro 87 support). The openrgb binary
-# is taken from $OPENRGB, else from PATH.
+# unit retro87-openrgb (OpenRGB with the Retro 87 support). Without $OPENRGB it
+# runs a local build that update-openrgb.sh keeps current (upstream OpenRGB plus
+# openrgb/retro87-openrgb.patch; user timer retro87-openrgb-update, daily).
+# OPENRGB=/path/to/openrgb uses that binary instead, without automatic updates.
 set -euo pipefail
 dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 python="$dir/.venv/bin/python"
@@ -28,7 +30,10 @@ for arg in "$@"; do
         *) echo "Unknown option $arg" >&2; exit 2 ;;
     esac
 done
-openrgb="${OPENRGB:-$(command -v openrgb || true)}"
+managed="${RETRO87_OPENRGB_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/retro87-tools/openrgb}/bin/openrgb"
+openrgb="${OPENRGB:-$managed}"
+auto=0
+[[ -z "${OPENRGB:-}" && $direct == 0 ]] && auto=1
 args=""
 [[ $direct == 1 ]] && args="--direct"
 
@@ -36,8 +41,9 @@ render() { sed -e "s|@DIR@|$dir|g" -e "s|@PYTHON@|$python|g" -e "s|@USER@|$USER|
                -e "s|@OPENRGB@|$openrgb|g" -e "s|@ARGS@|$args|g" "$1"; }
 
 if [[ $uninstall == 1 ]]; then
-    systemctl --user disable --now retro87.service retro87-openrgb.service 2>/dev/null || true
-    rm -f "$units/retro87.service" "$units/retro87-openrgb.service" "$dbus/io.github.JoseStud.Retro87.service"
+    systemctl --user disable --now retro87.service retro87-openrgb.service retro87-openrgb-update.timer 2>/dev/null || true
+    rm -f "$units/retro87.service" "$units/retro87-openrgb.service" "$units/retro87-openrgb-update.service" \
+          "$units/retro87-openrgb-update.timer" "$dbus/io.github.JoseStud.Retro87.service"
     systemctl --user daemon-reload
     kpackagetool6 -t Plasma/Applet -r "$plasmoid" 2>/dev/null || true
     if [[ -e "$rules" || -e "$modules" ]]; then
@@ -55,10 +61,13 @@ if [[ ! -x "$python" ]] || ! "$python" -c "import PySide6.QtDBus" 2>/dev/null; t
     exit 1
 fi
 
-if [[ $direct == 0 && ! -x "$openrgb" ]]; then
-    echo "OpenRGB not found. Build OpenRGB with the Retro 87 support and run" >&2
-    echo "  OPENRGB=/path/to/openrgb ./install-kde.sh" >&2
-    echo "or install with --direct to let the service open the keyboard itself." >&2
+if [[ $direct == 0 && $auto == 0 && ! -x "$openrgb" ]]; then
+    echo "OPENRGB=$openrgb is not an executable." >&2
+    exit 1
+fi
+if [[ $auto == 1 ]] && ! command -v qmake6 >/dev/null; then
+    echo "The automatic OpenRGB build needs qmake6 and OpenRGB's build dependencies" >&2
+    echo "(Qt 6, libusb, hidapi, mbedtls). Install them, or use OPENRGB=/path/to/openrgb." >&2
     exit 1
 fi
 
@@ -92,10 +101,25 @@ else
     systemctl --user disable --now retro87-openrgb.service 2>/dev/null || true
     rm -f "$units/retro87-openrgb.service"
 fi
+if [[ $auto == 1 ]]; then
+    render "$dir/kde/retro87-openrgb-update.service" > "$units/retro87-openrgb-update.service"
+    render "$dir/kde/retro87-openrgb-update.timer" > "$units/retro87-openrgb-update.timer"
+else
+    systemctl --user disable --now retro87-openrgb-update.timer 2>/dev/null || true
+    rm -f "$units/retro87-openrgb-update.service" "$units/retro87-openrgb-update.timer"
+fi
 systemctl --user daemon-reload
 if [[ $direct == 0 ]]; then
     systemctl --user enable retro87-openrgb.service
     systemctl --user restart retro87-openrgb.service
+fi
+if [[ $auto == 1 ]]; then
+    systemctl --user enable --now retro87-openrgb-update.timer
+    if [[ ! -x "$openrgb" ]]; then
+        echo "Building OpenRGB with the Retro 87 patch in the background (several minutes);"
+        echo "it starts when done. Progress: journalctl --user -u retro87-openrgb-update -f"
+        systemctl --user start --no-block retro87-openrgb-update.service
+    fi
 fi
 systemctl --user enable retro87.service
 systemctl --user restart retro87.service

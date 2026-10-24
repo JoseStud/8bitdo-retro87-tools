@@ -31,7 +31,7 @@ ApplicationWindow {
     palette.mid: "#454545"
     onClosing: function(close) {
         if (window.deviceState.busy) { close.accepted = false; return }
-        if (window.deviceState.dirty && !exitConfirmed) { close.accepted = false; quitDialog.open() }
+        if ((window.deviceState.dirty || bridge.macroEditor.state.dirty) && !exitConfirmed) { close.accepted = false; quitDialog.open() }
     }
 
     component Note: Label {
@@ -198,13 +198,76 @@ ApplicationWindow {
                 }
             }
             }
-            // Macros: truthful capability boundary, extended by macro editor component.
+            // Local macro documents have a separate save/discard lifecycle.
             ColumnLayout {
-                spacing: 18
-                Label { text: "Macros"; font.pixelSize: 22 }
-                Note { text: "Macro storage is partly decoded, but safe backup and restoration are not established. Hardware macro editing remains unavailable."; color: "#dba836" }
-                Note { text: "The official app supports recording, per-event delays and repetition. These controls will not send guessed packets. Full keyboard parity is still in progress." }
-                Item { Layout.fillHeight: true }
+                id: macroPage
+                readonly property var editor: bridge.macroEditor
+                readonly property var state: editor.state
+                spacing: 10
+                Label { text: "Macros · local editor"; font.pixelSize: 22 }
+                Note { text: "Build and save macro files locally. Hardware assignment and playback are not available yet."; color: "#dba836" }
+                RowLayout {
+                    Label { text: "Name" }
+                    TextField {
+                        objectName: "macroName"; text: macroPage.state.name
+                        Layout.preferredWidth: 220
+                        onEditingFinished: macroPage.editor.configure(text, macroPage.state.repeat)
+                    }
+                    Label { text: "Repeat" }
+                    SpinBox {
+                        objectName: "macroRepeat"; from: 1; to: 255; value: macroPage.state.repeat
+                        onValueModified: macroPage.editor.configure(macroPage.state.name, value)
+                    }
+                    Item { Layout.fillWidth: true }
+                    Action { text: "New"; enabled: !macroPage.state.dirty; onClicked: macroPage.editor.new() }
+                    Action { text: "Open…"; enabled: !macroPage.state.dirty; onClicked: macroOpen.open() }
+                    Action { text: "Save as…"; objectName: "saveMacro"; onClicked: macroSave.open() }
+                    Action { text: "Discard edits"; objectName: "discardMacro"; enabled: macroPage.state.dirty; onClicked: macroDiscard.open() }
+                }
+                RowLayout {
+                    Label { text: "Super Button target" }
+                    ComboBox {
+                        id: macroTrigger; objectName: "macroTrigger"
+                        model: ["Unassigned", "K1 · Port A", "K2 · Port A", "K3 · Port B", "K4 · Port B", "K5 · Port X", "K6 · Port X", "K7 · Port Y", "K8 · Port Y"]
+                        currentIndex: macroPage.state.trigger ? Number(macroPage.state.trigger.substring(1)) : 0
+                        onActivated: macroPage.editor.setTrigger(currentIndex === 0 ? "" : "k" + currentIndex)
+                        Accessible.name: "Local macro target"
+                        Layout.preferredWidth: 170
+                    }
+                    Action { text: "Identify buttons…"; enabled: !window.deviceState.busy; onClicked: bridge.identifyButtons() }
+                    Note { text: "Target saved in the macro file; not applied to the keyboard." }
+                }
+                RowLayout {
+                    ComboBox { id: macroKey; objectName: "macroKey"; model: macroPage.editor.keys; Layout.preferredWidth: 170; Accessible.name: "Event key" }
+                    ComboBox { id: macroAction; model: ["down", "up"]; Accessible.name: "Key action" }
+                    Label { text: "Delay before event (ms)" }
+                    SpinBox { id: macroDelay; from: 0; to: 65535; value: 0; editable: true; Accessible.name: "Event delay" }
+                    Action { text: "Add event"; objectName: "addMacroEvent"; enabled: macroPage.state.events.length < 1008; onClicked: macroPage.editor.append(macroKey.currentText, macroAction.currentText, macroDelay.value) }
+                }
+                ListView {
+                    id: macroEvents; objectName: "macroEvents"
+                    Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 4
+                    model: macroPage.state.events
+                    ScrollBar.vertical: ScrollBar {}
+                    delegate: RowLayout {
+                        required property var modelData
+                        required property int index
+                        width: macroEvents.width - 20
+                        Label { text: (index + 1) + "."; Layout.preferredWidth: 36 }
+                        Label { text: modelData.key + " · " + modelData.action; Layout.fillWidth: true }
+                        SpinBox {
+                            from: 0; to: 65535; value: modelData.delay_ms; editable: true
+                            Accessible.name: "Delay for event " + (index + 1)
+                            onValueModified: macroPage.editor.update(index, modelData.key, modelData.action, value)
+                        }
+                        Label { text: "ms" }
+                        Action { text: "↑"; implicitWidth: 38; enabled: index > 0; Accessible.name: "Move event up"; onClicked: macroPage.editor.move(index, -1) }
+                        Action { text: "↓"; implicitWidth: 38; enabled: index + 1 < macroPage.state.events.length; Accessible.name: "Move event down"; onClicked: macroPage.editor.move(index, 1) }
+                        Action { text: "Remove"; onClicked: macroPage.editor.remove(index) }
+                    }
+                }
+                Note { text: macroPage.state.events.length + " / 1008 events · " + macroPage.state.durationMs + " ms including repeats · " + (macroPage.state.dirty ? "Unsaved macro edits" : "No unsaved macro edits") }
+                Note { text: macroPage.state.error || macroPage.state.problems.slice(0, 3).join("\n"); color: macroPage.state.error ? "#ffb0a0" : "#dba836" }
             }
             // Volume
             ColumnLayout {
@@ -424,6 +487,20 @@ ApplicationWindow {
     }
 
     FileDialog {
+        id: macroOpen; title: "Open local macro"; nameFilters: ["Retro 87 macro (*.json)"]
+        onAccepted: bridge.macroFile(selectedFile.toString(), false)
+    }
+    FileDialog {
+        id: macroSave; title: "Save macro to a new file"; fileMode: FileDialog.SaveFile
+        defaultSuffix: "json"; nameFilters: ["Retro 87 macro (*.json)"]
+        onAccepted: bridge.macroFile(selectedFile.toString(), true)
+    }
+    Dialog {
+        id: macroDiscard; objectName: "macroDiscardDialog"; title: "Discard unsaved macro edits?"
+        anchors.centerIn: parent; modal: true; standardButtons: Dialog.Yes | Dialog.No
+        onAccepted: bridge.macroEditor.discard()
+    }
+    FileDialog {
         id: openFile; title: "Open Retro 87 snapshot"; nameFilters: ["Retro 87 snapshots (*.json)"]
         onAccepted: { if (window.fileAction === "restore") bridge.restoreProfile(selectedFile.toString()); else bridge.openSnapshot(selectedFile.toString()) }
     }
@@ -472,7 +549,7 @@ ApplicationWindow {
         onAccepted: bridge.applyConfirmed()
     }
     Dialog {
-        id: quitDialog; title: "Close and lose staged edits?"; anchors.centerIn: parent; modal: true; standardButtons: Dialog.Yes | Dialog.No
+        id: quitDialog; title: "Close and lose unsaved profile or macro edits?"; anchors.centerIn: parent; modal: true; standardButtons: Dialog.Yes | Dialog.No
         onAccepted: { window.exitConfirmed = true; window.close() }
     }
 }

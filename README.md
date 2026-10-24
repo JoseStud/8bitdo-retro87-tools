@@ -72,13 +72,43 @@ sed "s|@DIR@|$PWD|g" retro87-tools.desktop > ~/.local/share/applications/retro87
 ./run-gui --snapshot original-config.json   # offline, no device access
 ```
 
-Pages: Keys (remapping), Macros (status only), Volume (device sound level),
+Pages: Keys (remapping), Macros (local editor), Volume (device sound level),
 Lighting (presets and the per-key editor) and Profiles (create/rename,
 snapshots, restore). Edits are staged in memory. **Review changes** lists
 every byte range; **Apply** re-reads the keyboard and refuses if it changed
 since loading (the Profile and lighting keys also change it). It then writes a
 backup to `~/.local/share/retro87-tools/backups`, writes, and verifies by
 readback. After a failure it stops without retrying; restore from the backup.
+
+**Macros**: build key-down/key-up sequences, edit the delay before each event
+in milliseconds, reorder/remove events, and set a finite repeat count. The
+editor reports unmatched presses/releases and allows up to 1008 events.
+**Save as…** saves a separate, versioned `retro87-macro` JSON document to a new
+file; **Open…** loads it. Save or discard edits before opening another macro.
+Incomplete sequences can be saved as drafts. Select a **Super Button target**
+(K1–K8) to save the intended trigger in the file. Version 2 adds that target;
+version 1 files still open as unassigned. This does **not** program the button.
+Macro edits are independent of profile snapshots, Review and Apply. Recording,
+playback and hardware macro assignment/restoration remain unavailable.
+
+**Identify buttons…** opens a separate, focused window. Click Start and press
+each Super Button to see its K number. Identification stops on focus loss or
+after 30 seconds and restores normal report mode. It shows only extension inputs,
+not ordinary typing. Vendor port pairs are A: K1/K2, B: K4/K3, X: K5/K6,
+Y: K8/K7; use identification to confirm your physical buttons.
+
+To run identification directly or capture a full read-only macro backup:
+
+```sh
+.venv/bin/python retro87_buttons.py
+.venv/bin/python retro87_macro_backup.py backups/macros-before-changes.json
+```
+
+The backup includes the profile, LEDs and all ten complete 4096-byte macro
+allocations, each read twice for consistency. It uses a separate backup format
+and refuses to overwrite an existing file. Ordinary profile snapshots still omit
+macros. Hardware macro erase/write commands remain disabled until their erase
+extent and restoration behavior are established.
 
 **Per-key lighting** (Lighting page, lower section): click a key, Ctrl+click
 to add more, enter `#RRGGBB`, then **Colour selected**. Choose an effect,
@@ -89,8 +119,9 @@ built-in preset switches back.
 ## KDE Plasma integration
 
 ```sh
-OPENRGB=/path/to/openrgb ./install-kde.sh   # asks for sudo once, for udev rules and the backlight
+./install-kde.sh                            # asks for sudo once, for udev rules and the backlight
 ./install-kde.sh --no-backlight             # no root; keeps previously installed udev rules
+OPENRGB=/path/to/openrgb ./install-kde.sh   # use this OpenRGB binary instead of the auto-updated build
 ./install-kde.sh --direct                   # without OpenRGB (see below)
 ./install-kde.sh --uninstall
 ```
@@ -104,8 +135,10 @@ OpenRGB's SDK server as the user unit `retro87-openrgb` (localhost only), and
 the tray service sends every change through it. The OpenRGB GUI can be used at
 the same time: started while the server runs, it connects to it instead of
 opening devices. This needs an OpenRGB build with the Retro 87 support (the
-8BitDo controller, and the HID LampArray changes for the USB cable); the
-binary comes from `$OPENRGB` or `PATH`. In OpenRGB the keyboard is one device,
+8BitDo controller, and the HID LampArray changes for the USB cable). By
+default the installer builds one locally and keeps it current with a daily
+user timer (`update-openrgb.sh`); `OPENRGB=` selects another binary, such as
+the fork's release AppImage. In OpenRGB the keyboard is one device,
 **8BitDo Retro 87 Mecha BREAK**: the stored effects and the stored per-key
 picture (*Custom*) work over the dongle or the cable and are saved on the
 keyboard; over the cable it also has **Direct**, runtime per-key colours
@@ -299,3 +332,16 @@ do not include or redistribute any vendor binaries or artwork.
 ## License
 
 MIT; see [LICENSE](LICENSE).
+
+## Change the wallpaper with the Super Buttons
+
+`retro87_chord.py` calls waywallen's `Next` when both Super Buttons (default
+K7+K8, see `--keys`) are held together; `--previous` goes back instead. It uses
+the temporary report mode of the identification window and writes nothing to the
+keyboard, but it holds the configuration interface, so stop it before using the
+GUI. Run it with `.venv/bin/python retro87_chord.py`, or install it as a user
+unit (not done by `install-kde.sh`):
+
+```bash
+sed -e "s|@DIR@|$PWD|g" -e "s|@PYTHON@|$PWD/.venv/bin/python|g" kde/retro87-chord.service > ~/.config/systemd/user/retro87-chord.service && systemctl --user daemon-reload && systemctl --user enable --now retro87-chord
+```

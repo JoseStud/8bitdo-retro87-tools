@@ -3,6 +3,8 @@ Description=OpenRGB SDK server for the Retro 87 tools (localhost only)
 PartOf=graphical-session.target
 After=plasma-core.target
 Before=retro87.service
+# Before the first managed build exists, do nothing instead of failing.
+ConditionFileIsExecutable=@OPENRGB@
 
 [Service]
 # The only program that opens the keyboard. The OpenRGB GUI and the Retro 87
