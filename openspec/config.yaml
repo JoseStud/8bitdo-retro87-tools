@@ -1,0 +1,68 @@
+schema: spec-driven
+
+context: |
+  Project: unofficial Linux tools for one keyboard, the 8BitDo Retro 87
+  Mechanical Keyboard - Mecha BREAK: Panther. A dependency-free Python CLI
+  (retro87.py), a PySide6/QML desktop app (run-gui), a KDE Plasma tray service,
+  and a patch that adds the keyboard to OpenRGB (openrgb/retro87-openrgb.patch).
+
+  Hardware and connections: only this model. 2.4 GHz dongle 2dc8:202e
+  ("8BitDo Retro 87 Adapter X") or USB cable 2dc8:2028 ("8BitDo Retro 87
+  Keyboard X"). Bluetooth is not supported. Both connections expose the same
+  configuration interface (interface 2, usage page 0xffa0, 64-byte reports).
+  Only the cable exposes HID LampArray (interface 3) for runtime colours.
+  When the cable is plugged in, the tools use it.
+
+  Dependency rule: the CLI and the protocol modules (retro87.py,
+  retro87_core.py and what they import) use the Python standard library only,
+  Python 3.9+. PySide6 is for the desktop app and tray only. Research tools
+  (dnfile, dncil, pefile, capstone) are never needed to run the tools.
+
+  How the protocol was recovered: static analysis of the official Ultimate
+  Software V2 for Windows v1.35. The vendor code is parsed and disassembled,
+  never executed. Findings are then checked on the owner's keyboard.
+  PROTOCOL.md is the protocol record. research/README.md is the analysis and
+  hardware test log. research/storage-wear.md is the flash-wear record.
+  research/inspect_vendor.py reproduces the static analysis. Vendor binaries
+  and artwork are never committed.
+
+  Safety model: every write previews by default and needs explicit approval
+  (--apply in the CLI, Apply in the GUI). A backup is saved before a write and
+  the written range is verified by readback. After a failure the tools stop;
+  they do not retry or roll back. Unknown bytes are preserved. The tools never
+  run as root.
+
+  Tests: Python unittest, no hardware. They run against mocks and an in-memory
+  simulator (SimulatedKeyboard). Command:
+  QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest test_retro87 test_model
+  test_gui test_service test_wallpaper test_live test_lamparray test_openrgb
+  test_macros test_macro_backup test_buttons test_chord
+
+  Evidence levels used in the documents: "vendor code only" (decoded by static
+  analysis), "tested" (unit tests pass), "hardware-verified" (the owner has
+  checked the behaviour on the physical keyboard).
+
+rules:
+  proposal:
+    - Derive every claim from the repository record. Name the source document.
+    - State plainly what is unknown. Do not invent protocol details.
+    - Firmware updates are a non-goal. Do not propose reading, writing or flashing firmware.
+    - Only the Retro 87 Mecha BREAK over dongle or USB cable is in scope. Bluetooth and other models are not.
+    - Plain English, short sentences.
+  specs:
+    - A feature is "hardware-verified" only after the owner has checked it on the physical keyboard. Readback alone is not enough, because the dongle answers reads from its own copy.
+    - Every write to the keyboard needs a preview, explicit approval, a backup before the write and a readback after it.
+    - Writes to the keyboard's storage respect the limits in research/storage-wear.md. No continuous or per-frame writes through the configuration interface. Identical writes are skipped. Animation uses HID LampArray (Direct) only.
+    - Unknown or unsupported bytes are preserved, never normalised.
+  design:
+    - Record the evidence level of every protocol fact used (vendor code only, tested, hardware-verified).
+    - The CLI and protocol modules stay dependency-free (Python standard library only).
+    - Any new storage write path states how often it can write and how that fits research/storage-wear.md.
+    - No vendor binaries or artwork in the repository. Vendor code is never executed.
+  tasks:
+    - Each task is small and says how it is verified (unit test, command, or hardware check by the owner).
+    - Each task ends with its source in parentheses, for example "(PROTOCOL.md, Key records)".
+    - Tasks that need the physical keyboard are marked "(hardware, owner)". Only the owner does them.
+    - If the record does not say how something works, the first tasks are the decoding work.
+    - A hardware write task comes after a backup task and names how to restore.
+    - Update README.md, PROTOCOL.md and research/README.md evidence levels only after the matching hardware check has passed.
