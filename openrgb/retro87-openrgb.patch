@@ -677,10 +677,10 @@ index 63a7a53..80e5c27 100644
          }
 diff --git a/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.cpp b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.cpp
 new file mode 100644
-index 0000000..8be180e
+index 0000000..2dc7646
 --- /dev/null
 +++ b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.cpp
-@@ -0,0 +1,510 @@
+@@ -0,0 +1,522 @@
 +/*---------------------------------------------------------*\
 +| EightBitDoRetro87Controller.cpp                           |
 +|                                                           |
@@ -711,13 +711,18 @@ index 0000000..8be180e
 +    | Read the stored settings so that unchanged bytes are  |
 +    | not rewritten and the current effect can be shown     |
 +    \*-----------------------------------------------------*/
++    /*-----------------------------------------------------*\
++    | A failed read is reported by the detector, which      |
++    | knows whether it is expected (dongle) or not (cable)  |
++    \*-----------------------------------------------------*/
 +    custom_known = false;
++    probing      = true;
 +    profile_read = Read(RETRO87_CMD_READ_PROFILE, profile, RETRO87_PROFILE_SIZE);
++    probing      = false;
 +
 +    if(!profile_read)
 +    {
 +        memset(profile, 0xFF, sizeof(profile));
-+        LOG_WARNING("[%s] Could not read the keyboard profile", name.c_str());
 +    }
 +    else if(!IsProfileValid())
 +    {
@@ -1046,7 +1051,14 @@ index 0000000..8be180e
 +        return(true);
 +    }
 +
-+    LOG_WARNING("[%s] No response to command 0x%02X at offset 0x%03X", name.c_str(), command, offset);
++    if(probing)
++    {
++        LOG_DEBUG("[%s] No response to command 0x%02X at offset 0x%03X", name.c_str(), command, offset);
++    }
++    else
++    {
++        LOG_WARNING("[%s] No response to command 0x%02X at offset 0x%03X", name.c_str(), command, offset);
++    }
 +
 +    return(false);
 +}
@@ -1193,10 +1205,10 @@ index 0000000..8be180e
 +}
 diff --git a/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.h b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.h
 new file mode 100644
-index 0000000..4d38dc7
+index 0000000..04d8a77
 --- /dev/null
 +++ b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87Controller.h
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,132 @@
 +/*---------------------------------------------------------*\
 +| EightBitDoRetro87Controller.h                             |
 +|                                                           |
@@ -1316,6 +1328,7 @@ index 0000000..4d38dc7
 +    std::string     location;
 +    std::string     name;
 +    bool            profile_read;
++    bool            probing;        /* Initial profile read; no reply is expected from an idle dongle */
 +    std::string     connection;
 +    std::mutex      transfer_mutex;
 +    unsigned char   profile[RETRO87_PROFILE_SIZE];
@@ -1330,10 +1343,10 @@ index 0000000..4d38dc7
 +};
 diff --git a/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87ControllerDetect.cpp b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87ControllerDetect.cpp
 new file mode 100644
-index 0000000..d9cc3cd
+index 0000000..77ee3b4
 --- /dev/null
 +++ b/Controllers/8BitDoController/8BitDoRetro87Controller/EightBitDoRetro87ControllerDetect.cpp
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,102 @@
 +/*---------------------------------------------------------*\
 +| EightBitDoRetro87ControllerDetect.cpp                     |
 +|                                                           |
@@ -1408,6 +1421,11 @@ index 0000000..d9cc3cd
 +#endif
 +
 +            detected_controllers.push_back(new RGBController_EightBitDoRetro87(controller, lamps));
++        }
++        else if(info->product_id == EIGHTBITDO_RETRO87_WIRED_PID)
++        {
++            LOG_WARNING("[%s] Could not read the keyboard profile over the USB cable; not added", name.c_str());
++            delete controller;
 +        }
 +        else
 +        {
