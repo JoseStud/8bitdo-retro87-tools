@@ -66,3 +66,7 @@ rules:
     - If the record does not say how something works, the first tasks are the decoding work.
     - A hardware write task comes after a backup task and names how to restore.
     - Update README.md, PROTOCOL.md and research/README.md evidence levels only after the matching hardware check has passed.
+
+references:
+  - id: josestud-projects
+    remote: https://github.com/JoseStud/josestud-projects.git
